@@ -419,42 +419,26 @@ class MainWindow(QMainWindow):
     
     def load_personal_settings(self):
         """加载个性化设置并应用到对话页面"""
-        import json
-        import sys
+        from core.database import get_database
         from core.media_manager import get_media_manager
         
-        # 获取配置文件路径
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 从数据库加载个性化设置
+        db = get_database()
+        user_name = db.get_personal_setting('user_name', '我')
+        avatar_path = db.get_personal_setting('user_avatar_path')
+        avatar_color = db.get_personal_setting('user_avatar_color', '#007AFF')
+        backgrounds = db.get_personal_setting('chat_backgrounds', [])
+        interval = db.get_personal_setting('background_interval', 5)
         
-        config_path = os.path.join(base_dir, 'personal_settings.json')
+        print(f"[DEBUG] 从数据库加载个性化设置:")
+        print(f"[DEBUG]   user_name: {user_name}")
+        print(f"[DEBUG]   avatar_path: {avatar_path}")
+        print(f"[DEBUG]   avatar_color: {avatar_color}")
+        print(f"[DEBUG]   backgrounds: {backgrounds}")
+        print(f"[DEBUG]   interval: {interval}")
         
-        # 默认值
-        user_name = "我"
-        avatar_path = None
-        avatar_color = "#007AFF"
-        backgrounds = []
-        interval = 5
-        
-        # 加载配置
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                user_name = data.get('user_name', '我')
-                avatar_path = data.get('user_avatar_path')
-                avatar_color = data.get('user_avatar_color', '#007AFF')
-                backgrounds = data.get('chat_backgrounds', [])
-                interval = data.get('background_interval', 5)
-            except Exception as e:
-                print(f"加载个性化设置失败: {e}")
-        
-        # 转换为绝对路径
+        # 转换背景图片为绝对路径
         media_manager = get_media_manager()
-        if avatar_path:
-            avatar_path = media_manager.get_absolute_path(avatar_path)
         
         absolute_backgrounds = []
         for bg in backgrounds:
@@ -462,7 +446,7 @@ class MainWindow(QMainWindow):
             if os.path.exists(abs_path):
                 absolute_backgrounds.append(abs_path)
         
-        # 应用到对话页面
+        # 应用到对话页面（头像路径保持相对路径，由 ChatBubble 处理）
         self.chat_page.set_user_name(user_name)
         self.chat_page.set_user_avatar(avatar_path, avatar_color)
         self.chat_page.set_chat_backgrounds(absolute_backgrounds, interval)

@@ -113,7 +113,9 @@ class ChatPage(QWidget):
         self.scroll_area.setWidget(self.chat_container)
         parent_layout.addWidget(self.scroll_area, 1)
         
-        self.show_welcome()
+        # 初始化时不显示欢迎界面，等待 personas 数据加载后再显示
+        self.welcome_widget = None
+        self.carousel = None
     
     def create_input_area(self, parent_layout):
         self.input_container = QWidget()
@@ -154,6 +156,19 @@ class ChatPage(QWidget):
     def set_personas(self, personas: dict):
         """设置可用人格列表"""
         self.personas = personas
+        
+        # 如果欢迎界面已存在且有旋转木马，更新它
+        if hasattr(self, 'carousel') and self.carousel:
+            self.carousel.set_personas(personas)
+        # 如果欢迎界面存在但没有旋转木马，重新创建
+        elif hasattr(self, 'welcome_widget') and self.welcome_widget:
+            self.clear_welcome()
+            self.show_welcome(personas)
+        # 如果是首次设置且当前没有消息，显示欢迎界面
+        elif not hasattr(self, 'welcome_widget') or not self.welcome_widget:
+            # 检查聊天区域是否为空（只有stretch）
+            if self.chat_layout.count() <= 1:
+                self.show_welcome(personas)
 
     def set_chat_backgrounds(self, backgrounds: list, interval: int = 5):
         """设置聊天背景"""
@@ -271,6 +286,8 @@ class ChatPage(QWidget):
             # 提取简化的模型名（去掉量化版本和 :latest）
             self.current_model_name = self._simplify_model_name(model_name)
             self.model_changed.emit(model_name)
+            # 恢复正常样式（如果之前是错误状态）
+            self._restore_model_combo_style()
     
     def _simplify_model_name(self, full_name: str) -> str:
         """简化模型名称，去掉量化版本"""
@@ -310,6 +327,7 @@ class ChatPage(QWidget):
     
     def set_user_avatar(self, path: str = None, color: str = None):
         """设置用户头像（支持图片或颜色）"""
+        print(f"[DEBUG] set_user_avatar called: path={path}, color={color}")
         self.user_avatar_path = path
         self.user_avatar_color = color if color else "#007AFF"
     
@@ -500,7 +518,8 @@ class ChatPage(QWidget):
                 else:
                     current_model = self.model_combo.currentText()
                     if not current_model:
-                        QMessageBox.warning(self, "提示", "请先选择模型")
+                        # 不弹窗，给模型下拉框添加红色边框提示
+                        self._highlight_model_combo_error()
                         return True
                     
                     self.on_send_clicked()
@@ -509,14 +528,13 @@ class ChatPage(QWidget):
         return super().eventFilter(obj, event)
     
     def show_welcome(self, personas: dict = None):
-        """显示欢迎界面（含人格选择）"""
-        from PySide6.QtWidgets import QScrollArea, QGridLayout
+        """显示欢迎界面（3D旋转木马 - 仅助手）"""
+        from .carousel_widget import CarouselWidget
         
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
-        layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
         
         # 顶部标题区域
         header_widget = QWidget()
@@ -525,66 +543,76 @@ class ChatPage(QWidget):
         header_layout.setAlignment(Qt.AlignCenter)
         
         icon = QLabel("🤖")
-        icon.setFont(QFont("Segoe UI Emoji", 56))
+        icon.setFont(QFont("Segoe UI Emoji", 48))
         icon.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(icon)
         
-        title = QLabel("开始新对话")
-        title.setFont(QFont("Microsoft YaHei UI", 28, QFont.Bold))
+        title = QLabel("选择助手开始对话")
+        title.setFont(QFont("Microsoft YaHei UI", 24, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"color: {self.theme.colors['accent_light']};")
         header_layout.addWidget(title)
         
-        desc = QLabel("选择一个助手或角色开始对话")
-        desc.setFont(QFont("Microsoft YaHei UI", 14))
-        desc.setStyleSheet(f"color: {self.theme.colors['text']};")
+        desc = QLabel("点击卡片选择 · 滚轮切换 · 左右键导航")
+        desc.setFont(QFont("Microsoft YaHei UI", 12))
+        desc.setStyleSheet(f"color: {self.theme.colors['text_secondary']};")
         desc.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(desc)
         
         layout.addWidget(header_widget)
         
-        # 人格选择区域（带滚动）
+        # 3D 旋转木马 - 只显示助手
         if personas:
-            # 分类助手和角色
-            assistants = {}
-            roles = {}
+            # 筛选出助手（排除角色扮演）
+            assistants = {k: v for k, v in personas.items() if v.get('type', 'assistant') == 'assistant'}
             
-            for key, persona in personas.items():
-                persona_type = persona.get('type', 'assistant')
-                if persona_type == 'roleplay':
-                    roles[key] = persona
-                else:
-                    assistants[key] = persona
-            
-            # 创建滚动区域
-            scroll_area = QScrollArea()
-            scroll_area.setWidgetResizable(True)
-            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            scroll_area.setStyleSheet("""
-                QScrollArea {
-                    border: none;
-                    background: transparent;
-                }
-            """)
-            
-            scroll_content = QWidget()
-            scroll_layout = QVBoxLayout(scroll_content)
-            scroll_layout.setSpacing(30)
-            scroll_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-            
-            # 添加助手分类
             if assistants:
-                assistant_section = self._create_persona_section("🤖 助手", assistants)
-                scroll_layout.addWidget(assistant_section)
+                self.carousel = CarouselWidget(self.welcome_widget)
+                self.carousel.set_personas(assistants)
+                self.carousel.persona_selected.connect(self.new_chat_with_persona.emit)
+                layout.addWidget(self.carousel, 1)
+                
+                # 应用主题
+                c = self.theme.colors
+                self.carousel.setStyleSheet(f"background-color: {c['bg']};")
+        
+        # 控制提示
+        hint_widget = QWidget()
+        hint_layout = QHBoxLayout(hint_widget)
+        hint_layout.setAlignment(Qt.AlignCenter)
+        hint_layout.setSpacing(30)
+        
+        hints = [
+            ("← →", "切换助手"),
+            ("滚轮", "旋转"),
+            ("Enter", "确认选择")
+        ]
+        
+        for key, desc_text in hints:
+            hint_item = QWidget()
+            hint_item_layout = QHBoxLayout(hint_item)
+            hint_item_layout.setSpacing(8)
+            hint_item_layout.setContentsMargins(0, 0, 0, 0)
             
-            # 添加角色分类
-            if roles:
-                role_section = self._create_persona_section("🎭 角色扮演", roles)
-                scroll_layout.addWidget(role_section)
+            key_label = QLabel(key)
+            key_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+            key_label.setStyleSheet(f"""
+                background-color: {self.theme.colors['card_bg']};
+                color: {self.theme.colors['accent']};
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid {self.theme.colors['border']};
+            """)
+            hint_item_layout.addWidget(key_label)
             
-            scroll_area.setWidget(scroll_content)
-            layout.addWidget(scroll_area, 1)
+            desc_label = QLabel(desc_text)
+            desc_label.setFont(QFont("Microsoft YaHei UI", 10))
+            desc_label.setStyleSheet(f"color: {self.theme.colors['text_dim']};")
+            hint_item_layout.addWidget(desc_label)
+            
+            hint_layout.addWidget(hint_item)
+        
+        layout.addWidget(hint_widget)
         
         self.chat_layout.insertWidget(0, self.welcome_widget)
     
@@ -724,8 +752,8 @@ class ChatPage(QWidget):
         return btn
     
     def show_welcome_assistants_only(self):
-        """显示欢迎界面（只显示助手）"""
-        from PySide6.QtWidgets import QScrollArea, QGridLayout
+        """显示欢迎界面（只显示助手 - 3D旋转木马）"""
+        from .carousel_widget import CarouselWidget
         
         personas = getattr(self, 'personas', None)
         if not personas:
@@ -734,11 +762,13 @@ class ChatPage(QWidget):
         # 只筛选助手
         assistants = {k: v for k, v in personas.items() if v.get('type', 'assistant') == 'assistant'}
         
+        if not assistants:
+            return
+        
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
-        layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
         
         # 顶部标题区域
         header_widget = QWidget()
@@ -747,53 +777,77 @@ class ChatPage(QWidget):
         header_layout.setAlignment(Qt.AlignCenter)
         
         icon = QLabel("🤖")
-        icon.setFont(QFont("Segoe UI Emoji", 56))
+        icon.setFont(QFont("Segoe UI Emoji", 48))
         icon.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(icon)
         
         title = QLabel("选择助手")
-        title.setFont(QFont("Microsoft YaHei UI", 28, QFont.Bold))
+        title.setFont(QFont("Microsoft YaHei UI", 24, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"color: {self.theme.colors['accent_light']};")
         header_layout.addWidget(title)
         
-        desc = QLabel("选择一个助手开始对话")
-        desc.setFont(QFont("Microsoft YaHei UI", 14))
-        desc.setStyleSheet(f"color: {self.theme.colors['text']};")
+        desc = QLabel("点击卡片选择 · 滚轮切换 · 左右键导航")
+        desc.setFont(QFont("Microsoft YaHei UI", 12))
+        desc.setStyleSheet(f"color: {self.theme.colors['text_secondary']};")
         desc.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(desc)
         
         layout.addWidget(header_widget)
         
-        # 创建滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
+        # 3D 旋转木马
+        self.carousel = CarouselWidget(self.welcome_widget)
+        self.carousel.set_personas(assistants)
+        self.carousel.persona_selected.connect(self.new_chat_with_persona.emit)
+        layout.addWidget(self.carousel, 1)
         
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(30)
-        scroll_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        # 应用主题
+        c = self.theme.colors
+        self.carousel.setStyleSheet(f"background-color: {c['bg']};")
         
-        if assistants:
-            assistant_section = self._create_persona_section("🤖 助手", assistants)
-            scroll_layout.addWidget(assistant_section)
+        # 控制提示
+        hint_widget = QWidget()
+        hint_layout = QHBoxLayout(hint_widget)
+        hint_layout.setAlignment(Qt.AlignCenter)
+        hint_layout.setSpacing(30)
         
-        scroll_area.setWidget(scroll_content)
-        layout.addWidget(scroll_area, 1)
+        hints = [
+            ("← →", "切换助手"),
+            ("滚轮", "旋转"),
+            ("Enter", "确认选择")
+        ]
+        
+        for key, desc_text in hints:
+            hint_item = QWidget()
+            hint_item_layout = QHBoxLayout(hint_item)
+            hint_item_layout.setSpacing(8)
+            hint_item_layout.setContentsMargins(0, 0, 0, 0)
+            
+            key_label = QLabel(key)
+            key_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+            key_label.setStyleSheet(f"""
+                background-color: {self.theme.colors['card_bg']};
+                color: {self.theme.colors['accent']};
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid {self.theme.colors['border']};
+            """)
+            hint_item_layout.addWidget(key_label)
+            
+            desc_label = QLabel(desc_text)
+            desc_label.setFont(QFont("Microsoft YaHei UI", 10))
+            desc_label.setStyleSheet(f"color: {self.theme.colors['text_dim']};")
+            hint_item_layout.addWidget(desc_label)
+            
+            hint_layout.addWidget(hint_item)
+        
+        layout.addWidget(hint_widget)
         
         self.chat_layout.insertWidget(0, self.welcome_widget)
     
     def show_welcome_roles_only(self):
-        """显示欢迎界面（只显示角色）"""
-        from PySide6.QtWidgets import QScrollArea, QGridLayout
+        """显示欢迎界面（只显示角色 - 3D旋转木马）"""
+        from .carousel_widget import CarouselWidget
         
         personas = getattr(self, 'personas', None)
         if not personas:
@@ -802,11 +856,13 @@ class ChatPage(QWidget):
         # 只筛选角色
         roles = {k: v for k, v in personas.items() if v.get('type', 'assistant') == 'roleplay'}
         
+        if not roles:
+            return
+        
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
-        layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
         
         # 顶部标题区域
         header_widget = QWidget()
@@ -815,47 +871,76 @@ class ChatPage(QWidget):
         header_layout.setAlignment(Qt.AlignCenter)
         
         icon = QLabel("🎭")
-        icon.setFont(QFont("Segoe UI Emoji", 56))
+        icon.setFont(QFont("Segoe UI Emoji", 48))
         icon.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(icon)
         
         title = QLabel("选择角色")
-        title.setFont(QFont("Microsoft YaHei UI", 28, QFont.Bold))
+        title.setFont(QFont("Microsoft YaHei UI", 24, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"color: {self.theme.colors['accent_light']};")
         header_layout.addWidget(title)
         
-        desc = QLabel("选择一个角色开始对话")
-        desc.setFont(QFont("Microsoft YaHei UI", 14))
-        desc.setStyleSheet(f"color: {self.theme.colors['text']};")
+        desc = QLabel("点击卡片选择 · 滚轮切换 · 左右键导航")
+        desc.setFont(QFont("Microsoft YaHei UI", 12))
+        desc.setStyleSheet(f"color: {self.theme.colors['text_secondary']};")
         desc.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(desc)
         
         layout.addWidget(header_widget)
         
-        # 创建滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
+        # 3D 旋转木马
+        self.carousel = CarouselWidget(self.welcome_widget)
+        self.carousel.set_personas(roles)
+        self.carousel.persona_selected.connect(self.new_chat_with_persona.emit)
+        layout.addWidget(self.carousel, 1)
         
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(30)
-        scroll_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        # 应用主题
+        c = self.theme.colors
+        self.carousel.setStyleSheet(f"background-color: {c['bg']};")
         
-        if roles:
-            role_section = self._create_persona_section("🎭 角色扮演", roles)
-            scroll_layout.addWidget(role_section)
+        # 控制提示
+        hint_widget = QWidget()
+        hint_layout = QHBoxLayout(hint_widget)
+        hint_layout.setAlignment(Qt.AlignCenter)
+        hint_layout.setSpacing(30)
         
-        scroll_area.setWidget(scroll_content)
-        layout.addWidget(scroll_area, 1)
+        hints = [
+            ("← →", "切换角色"),
+            ("滚轮", "旋转"),
+            ("Enter", "确认选择")
+        ]
+        
+        for key, desc_text in hints:
+            hint_item = QWidget()
+            hint_item_layout = QHBoxLayout(hint_item)
+            hint_item_layout.setSpacing(8)
+            hint_item_layout.setContentsMargins(0, 0, 0, 0)
+            
+            key_label = QLabel(key)
+            key_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+            key_label.setStyleSheet(f"""
+                background-color: {self.theme.colors['card_bg']};
+                color: {self.theme.colors['accent']};
+                padding: 4px 8px;
+                border-radius: 4px;
+                border: 1px solid {self.theme.colors['border']};
+            """)
+            hint_item_layout.addWidget(key_label)
+            
+            desc_label = QLabel(desc_text)
+            desc_label.setFont(QFont("Microsoft YaHei UI", 10))
+            desc_label.setStyleSheet(f"color: {self.theme.colors['text_dim']};")
+            hint_item_layout.addWidget(desc_label)
+            
+            hint_layout.addWidget(hint_item)
+        
+        layout.addWidget(hint_widget)
+        
+        self.chat_layout.insertWidget(0, self.welcome_widget)
+        
+        desc = QLabel("选择一个角色开始对话")
+        desc.setFont(QFont("Microsoft YaHei UI", 14))
         
         self.chat_layout.insertWidget(0, self.welcome_widget)
 
@@ -863,6 +948,8 @@ class ChatPage(QWidget):
         if hasattr(self, 'welcome_widget') and self.welcome_widget:
             self.welcome_widget.deleteLater()
             self.welcome_widget = None
+        if hasattr(self, 'carousel') and self.carousel:
+            self.carousel = None
     
     def _update_welcome_theme(self):
         """更新欢迎页面的主题"""
@@ -926,6 +1013,7 @@ class ChatPage(QWidget):
             avatar_path=self.user_avatar_path,
             timestamp=timestamp
         )
+        print(f"[DEBUG] 创建用户气泡: user_name={self.user_name}, avatar_path={self.user_avatar_path}")
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
         self.scroll_to_bottom()
     
@@ -984,13 +1072,159 @@ class ChatPage(QWidget):
     def on_send_clicked(self):
         current_model = self.model_combo.currentText()
         if not current_model:
-            QMessageBox.warning(self, "提示", "请先选择模型")
+            # 不弹窗，给模型下拉框添加红色边框提示
+            self._highlight_model_combo_error()
             return
         
         text = self.input_text.toPlainText().strip()
         if text:
             self.input_text.clear()
             self.send_message.emit(text)
+    
+    def _highlight_model_combo_error(self):
+        """高亮模型下拉框为错误状态（红色边框）"""
+        c = self.theme.colors
+        self.model_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {c['card_bg']};
+                border: 3px solid #dc3545;
+                border-radius: 12px;
+                padding: 8px 15px;
+                padding-right: 35px;
+                color: {c['text']};
+                font-size: 14px;
+                font-weight: 500;
+            }}
+            
+            QComboBox:hover {{
+                border-color: #dc3545;
+                background-color: {c['hover']};
+            }}
+            
+            QComboBox:focus {{
+                border-color: #dc3545;
+                background-color: {c['card_bg']};
+            }}
+            
+            QComboBox::drop-down {{
+                border: none;
+                width: 35px;
+                padding-right: 5px;
+            }}
+            
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 7px solid #dc3545;
+                margin-right: 8px;
+            }}
+            
+            QComboBox QAbstractItemView {{
+                background-color: {c['card_bg']};
+                color: {c['text']};
+                selection-background-color: {c['accent']};
+                selection-color: white;
+                border: 2px solid {c['border']};
+                border-radius: 12px;
+                padding: 8px;
+                outline: none;
+            }}
+            
+            QComboBox QAbstractItemView::item {{
+                padding: 10px 15px;
+                border-radius: 8px;
+                margin: 2px 0;
+            }}
+            
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {c['hover']};
+            }}
+            
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {c['accent']};
+                color: white;
+            }}
+        """)
+        
+        # 更新占位符文本
+        self.model_combo.setPlaceholderText("⚠️ 请先选择模型...")
+        
+        # 3秒后恢复正常样式
+        QTimer.singleShot(3000, self._restore_model_combo_style)
+    
+    def _restore_model_combo_style(self):
+        """恢复模型下拉框正常样式"""
+        c = self.theme.colors
+        self.model_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {c['card_bg']};
+                border: 2px solid {c['border']};
+                border-radius: 12px;
+                padding: 8px 15px;
+                padding-right: 35px;
+                color: {c['text']};
+                font-size: 14px;
+                font-weight: 500;
+            }}
+            
+            QComboBox:hover {{
+                border-color: {c['accent']};
+                background-color: {c['hover']};
+            }}
+            
+            QComboBox:focus {{
+                border-color: {c['accent']};
+                background-color: {c['card_bg']};
+            }}
+            
+            QComboBox::drop-down {{
+                border: none;
+                width: 35px;
+                padding-right: 5px;
+            }}
+            
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 7px solid {c['text_secondary']};
+                margin-right: 8px;
+            }}
+            
+            QComboBox::down-arrow:hover {{
+                border-top-color: {c['accent']};
+            }}
+            
+            QComboBox QAbstractItemView {{
+                background-color: {c['card_bg']};
+                color: {c['text']};
+                selection-background-color: {c['accent']};
+                selection-color: white;
+                border: 2px solid {c['border']};
+                border-radius: 12px;
+                padding: 8px;
+                outline: none;
+            }}
+            
+            QComboBox QAbstractItemView::item {{
+                padding: 10px 15px;
+                border-radius: 8px;
+                margin: 2px 0;
+            }}
+            
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {c['hover']};
+            }}
+            
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {c['accent']};
+                color: white;
+            }}
+        """)
+        
+        # 恢复占位符文本
+        self.model_combo.setPlaceholderText("选择模型...")
     
     @Slot(str)
     def set_title(self, title: str):

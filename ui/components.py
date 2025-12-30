@@ -106,22 +106,47 @@ class ChatBubble(QFrame):
         avatar.setFixedSize(80, 80)
         avatar.setAlignment(Qt.AlignCenter)
         
-        if self.avatar_path and os.path.exists(self.avatar_path):
-            # 使用自定义头像
+        print(f"[DEBUG] _create_avatar called: is_user={self.is_user}, avatar_path={self.avatar_path}")
+        
+        if self.avatar_path:
+            # 使用 MediaManager 获取绝对路径
+            from core.media_manager import get_media_manager
             from PySide6.QtGui import QPixmap
-            pixmap = QPixmap(self.avatar_path)
-            pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            avatar.setPixmap(pixmap)
-            avatar.setStyleSheet("""
-                QLabel {
-                    border-radius: 40px;
-                    background-color: transparent;
-                }
-            """)
+            
+            media_manager = get_media_manager()
+            absolute_path = media_manager.get_absolute_path(self.avatar_path)
+            
+            print(f"[DEBUG] 相对路径: {self.avatar_path}")
+            print(f"[DEBUG] 绝对路径: {absolute_path}")
+            print(f"[DEBUG] 文件存在: {os.path.exists(absolute_path)}")
+            
+            if os.path.exists(absolute_path):
+                # 使用自定义头像
+                pixmap = QPixmap(absolute_path)
+                print(f"[DEBUG] QPixmap 加载: isNull={pixmap.isNull()}, size={pixmap.size()}")
+                
+                if not pixmap.isNull():
+                    pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    avatar.setPixmap(pixmap)
+                    avatar.setStyleSheet("""
+                        QLabel {
+                            border-radius: 40px;
+                            background-color: transparent;
+                        }
+                    """)
+                    print(f"[DEBUG] 头像设置成功")
+                    return avatar
+                else:
+                    print(f"[DEBUG] QPixmap 加载失败")
+            else:
+                print(f"[DEBUG] 文件不存在")
         else:
-            # 使用默认 emoji
-            avatar.setText(default_emoji)
-            avatar.setFont(QFont("Segoe UI Emoji", 40))
+            print(f"[DEBUG] avatar_path 为空")
+        
+        # 使用默认 emoji
+        avatar.setText(default_emoji)
+        avatar.setFont(QFont("Segoe UI Emoji", 40))
+        print(f"[DEBUG] 使用默认 emoji: {default_emoji}")
         
         return avatar
     
@@ -172,13 +197,31 @@ class ChatBubble(QFrame):
     def set_avatar(self, avatar_path: str):
         """设置头像"""
         self.avatar_path = avatar_path
-        if avatar_path and os.path.exists(avatar_path):
+        if avatar_path:
+            from core.media_manager import get_media_manager
             from PySide6.QtGui import QPixmap
-            pixmap = QPixmap(avatar_path)
-            pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            self.avatar.setPixmap(pixmap)
-        else:
-            self.avatar.setText("🤖" if not self.is_user else "👤")
+            
+            media_manager = get_media_manager()
+            absolute_path = media_manager.get_absolute_path(avatar_path)
+            
+            if os.path.exists(absolute_path):
+                pixmap = QPixmap(absolute_path)
+                if not pixmap.isNull():
+                    pixmap = pixmap.scaled(80, 80, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    self.avatar.setPixmap(pixmap)
+                    self.avatar.setText("")
+                    self.avatar.setStyleSheet("""
+                        QLabel {
+                            border-radius: 40px;
+                            background-color: transparent;
+                        }
+                    """)
+                    return
+        
+        # 恢复默认头像
+        self.avatar.setPixmap(QPixmap())
+        self.avatar.setText("🤖" if not self.is_user else "👤")
+        self.avatar.setStyleSheet("")
 
 class HistoryItem(QPushButton):
     """历史记录项"""
