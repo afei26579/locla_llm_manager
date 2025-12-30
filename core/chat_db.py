@@ -183,6 +183,18 @@ class ChatManager:
             # 获取上下文消息
             messages = self._get_context_messages()
             
+            # 输出系统提示词日志
+            from core.logger import get_logger
+            logger = get_logger('chat')
+            persona = self.get_current_persona()
+            system_prompt = persona.get('system_prompt', '')
+            if system_prompt:
+                logger.info(f"当前对话使用的系统提示词: {system_prompt}")
+            else:
+                logger.info("当前对话未设置系统提示词")
+            logger.info(f"当前使用模型: {self.current_model}")
+            logger.info(f"当前助手/角色: {persona.get('name', '默认')}")
+            
             # 调用 Ollama API
             if stream_callback:
                 response = requests.post(

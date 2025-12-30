@@ -66,7 +66,7 @@ class StylesheetGenerator:
 /* ==================== 全局样式 ==================== */
 QMainWindow, QWidget {{
     background-color: {bg.get('primary', '#1e1e1e')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     font-family: {font_family};
     font-size: {font_size.get('normal', 13)}px;
 }}
@@ -79,7 +79,7 @@ QPushButton {{
     font-size: {font_size.get('normal', 13)}px;
     font-weight: 500;
     background-color: {surface.get('card', '#2d2d2d')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QPushButton:hover {{
@@ -92,7 +92,7 @@ QPushButton:pressed {{
 
 QPushButton:disabled {{
     opacity: 0.5;
-    color: {text.get('dim', '#6e6e73')};
+    color: {text.get('dim', '#909090')};
 }}
 
 /* 主要按钮 */
@@ -122,9 +122,10 @@ QLineEdit, QTextEdit, QPlainTextEdit {{
     border-radius: {radius_md}px;
     padding: 10px 12px;
     background-color: {surface.get('input', '#3c3c3c')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     font-size: {font_size.get('normal', 13)}px;
     selection-background-color: {accent.get('primary', '#007AFF')};
+    selection-color: #ffffff;
 }}
 
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
@@ -132,12 +133,16 @@ QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
 }}
 
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {{
-    border-color: {text.get('dim', '#6e6e73')};
+    border-color: {text.get('dim', '#909090')};
 }}
 
 QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
     background-color: {bg.get('secondary', '#252526')};
-    color: {text.get('dim', '#6e6e73')};
+    color: {text.get('dim', '#909090')};
+}}
+
+QLineEdit::placeholder, QTextEdit::placeholder, QPlainTextEdit::placeholder {{
+    color: {text.get('placeholder', '#707070')};
 }}
 
 /* ==================== 下拉框样式 ==================== */
@@ -147,7 +152,7 @@ QComboBox {{
     padding: 8px 15px;
     padding-right: 35px;
     background-color: {surface.get('input', '#3c3c3c')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     font-size: {font_size.get('normal', 13)}px;
     min-height: 20px;
 }}
@@ -171,7 +176,7 @@ QComboBox::down-arrow {{
     image: none;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
-    border-top: 7px solid {text.get('secondary', '#8e8e93')};
+    border-top: 7px solid {text.get('secondary', '#b0b0b0')};
     margin-right: 8px;
 }}
 
@@ -181,7 +186,7 @@ QComboBox::down-arrow:hover {{
 
 QComboBox QAbstractItemView {{
     background-color: {surface.get('card', '#2d2d2d')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     selection-background-color: {accent.get('primary', '#007AFF')};
     selection-color: white;
     border: 2px solid {border.get('default', '#3d3d3d')};
@@ -208,7 +213,7 @@ QComboBox QAbstractItemView::item:selected {{
 /* ==================== 复选框样式 ==================== */
 QCheckBox {{
     spacing: 8px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QCheckBox::indicator {{
@@ -232,7 +237,7 @@ QCheckBox::indicator:checked {{
 /* ==================== 单选框样式 ==================== */
 QRadioButton {{
     spacing: 8px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QRadioButton::indicator {{
@@ -278,7 +283,7 @@ QProgressBar {{
     background-color: {surface.get('input', '#3c3c3c')};
     height: 8px;
     text-align: center;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QProgressBar::chunk {{
@@ -296,7 +301,7 @@ QTabWidget::pane {{
 
 QTabBar::tab {{
     background-color: {bg.get('secondary', '#252526')};
-    color: {text.get('secondary', '#8e8e93')};
+    color: {text.get('secondary', '#b0b0b0')};
     padding: 10px 20px;
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-bottom: none;
@@ -307,7 +312,7 @@ QTabBar::tab {{
 
 QTabBar::tab:hover {{
     background-color: {surface.get('hover', '#3c3c3c')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QTabBar::tab:selected {{
@@ -388,7 +393,7 @@ QGroupBox {{
     margin-top: 12px;
     padding-top: 12px;
     font-weight: 600;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QGroupBox::title {{
@@ -408,22 +413,22 @@ QFrame[frameShape="5"]  /* VLine */
 
 /* ==================== 标签样式 ==================== */
 QLabel {{
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     background-color: transparent;
 }}
 
 QLabel[secondary="true"] {{
-    color: {text.get('secondary', '#8e8e93')};
+    color: {text.get('secondary', '#b0b0b0')};
 }}
 
 QLabel[dim="true"] {{
-    color: {text.get('dim', '#6e6e73')};
+    color: {text.get('dim', '#909090')};
 }}
 
 /* ==================== 工具提示样式 ==================== */
 QToolTip {{
     background-color: {surface.get('card', '#2d2d2d')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_sm}px;
     padding: 6px 10px;
@@ -432,7 +437,7 @@ QToolTip {{
 /* ==================== 菜单样式 ==================== */
 QMenu {{
     background-color: {surface.get('card', '#2d2d2d')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
     padding: 8px;
@@ -463,7 +468,7 @@ QMessageBox {{
 }}
 
 QMessageBox QLabel {{
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QMessageBox QPushButton {{
@@ -476,7 +481,7 @@ QListView {{
     background-color: {surface.get('card', '#2d2d2d')};
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     outline: none;
 }}
 
@@ -499,7 +504,7 @@ QTreeView {{
     background-color: {surface.get('card', '#2d2d2d')};
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     outline: none;
 }}
 
@@ -521,7 +526,7 @@ QTableView {{
     background-color: {surface.get('card', '#2d2d2d')};
     border: 1px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     gridline-color: {border.get('default', '#3d3d3d')};
     outline: none;
 }}
@@ -541,7 +546,7 @@ QTableView::item:selected {{
 
 QHeaderView::section {{
     background-color: {bg.get('secondary', '#252526')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     padding: 8px;
     border: none;
     border-bottom: 1px solid {border.get('default', '#3d3d3d')};
@@ -554,7 +559,7 @@ QSpinBox, QDoubleSpinBox {{
     border: 2px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
     padding: 6px 10px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     font-size: {font_size.get('normal', 13)}px;
 }}
 
@@ -563,7 +568,7 @@ QSpinBox:focus, QDoubleSpinBox:focus {{
 }}
 
 QSpinBox:hover, QDoubleSpinBox:hover {{
-    border-color: {text.get('dim', '#6e6e73')};
+    border-color: {text.get('dim', '#909090')};
 }}
 
 QSpinBox::up-button, QDoubleSpinBox::up-button {{
@@ -596,7 +601,7 @@ QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
     image: none;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
-    border-bottom: 5px solid {text.get('primary', '#ffffff')};
+    border-bottom: 5px solid {text.get('primary', '#e8e8e8')};
     width: 0px;
     height: 0px;
 }}
@@ -605,7 +610,7 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
     image: none;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
-    border-top: 5px solid {text.get('primary', '#ffffff')};
+    border-top: 5px solid {text.get('primary', '#e8e8e8')};
     width: 0px;
     height: 0px;
 }}
@@ -616,7 +621,7 @@ QDateEdit, QTimeEdit, QDateTimeEdit {{
     border: 2px solid {border.get('default', '#3d3d3d')};
     border-radius: {radius_md}px;
     padding: 6px 10px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
@@ -625,13 +630,13 @@ QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
 
 QCalendarWidget {{
     background-color: {surface.get('card', '#2d2d2d')};
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 /* ==================== 状态栏样式 ==================== */
 QStatusBar {{
     background-color: {bg.get('secondary', '#252526')};
-    color: {text.get('secondary', '#8e8e93')};
+    color: {text.get('secondary', '#b0b0b0')};
     border-top: 1px solid {border.get('default', '#3d3d3d')};
 }}
 
@@ -648,7 +653,7 @@ QToolButton {{
     border: none;
     border-radius: {radius_sm}px;
     padding: 6px;
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
 }}
 
 QToolButton:hover {{
@@ -661,7 +666,7 @@ QToolButton:pressed {{
 
 /* ==================== 停靠窗口样式 ==================== */
 QDockWidget {{
-    color: {text.get('primary', '#ffffff')};
+    color: {text.get('primary', '#e8e8e8')};
     titlebar-close-icon: none;
     titlebar-normal-icon: none;
 }}

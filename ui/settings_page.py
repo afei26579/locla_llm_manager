@@ -290,6 +290,7 @@ class SettingsPage(QWidget):
         self.apply_theme()
     
     def create_nav(self, parent_layout):
+        c = self.theme.colors
         self.nav = QWidget()
         self.nav.setFixedWidth(220)
         
@@ -306,6 +307,7 @@ class SettingsPage(QWidget):
         layout.addSpacing(20)
         
         self.nav_title = QLabel("设置")
+        self.nav_title.setStyleSheet(f"color: {c['text']};")
         self.nav_title.setFont(QFont("Microsoft YaHei UI", 20, QFont.Bold))
         layout.addWidget(self.nav_title)
         
@@ -347,6 +349,7 @@ class SettingsPage(QWidget):
         layout.addStretch()
         
         version = QLabel("版本 1.0.0")
+        version.setStyleSheet(f"color: {c['text_secondary']};")
         version.setFont(QFont("Microsoft YaHei UI", 10))
         layout.addWidget(version)
         
@@ -366,6 +369,7 @@ class SettingsPage(QWidget):
         user_layout.setSpacing(15)
         
         user_title = QLabel("用户设置")
+        user_title.setStyleSheet(f"color: {c['text']};")
         user_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
         user_layout.addWidget(user_title)
         
@@ -408,6 +412,7 @@ class SettingsPage(QWidget):
         name_row = QHBoxLayout()
         name_row.setSpacing(10)
         name_label = QLabel("显示名称:")
+        name_label.setStyleSheet(f"color: {c['text']};")
         name_label.setFont(QFont("Microsoft YaHei UI", 11))
         name_row.addWidget(name_label)
         
@@ -500,6 +505,7 @@ class SettingsPage(QWidget):
         
         # 轮播间隔设置
         interval_label = QLabel("轮播间隔:")
+        interval_label.setStyleSheet(f"color: {c['text']};")
         interval_label.setFont(QFont("Microsoft YaHei UI", 11))
         bg_btn_row.addWidget(interval_label)
         
@@ -1397,6 +1403,7 @@ class SettingsPage(QWidget):
         
         # 图标选择区域
         icon_label = QLabel("选择图标:")
+        icon_label.setStyleSheet(f"color: {c['text']};")
         icon_label.setFont(QFont("Microsoft YaHei UI", 11))
         layout.addWidget(icon_label)
         
@@ -1458,6 +1465,7 @@ class SettingsPage(QWidget):
         
         # 提示词
         prompt_label = QLabel("系统提示词:")
+        prompt_label.setStyleSheet(f"color: {c['text']};")
         prompt_label.setFont(QFont("Microsoft YaHei UI", 11))
         layout.addWidget(prompt_label)
         
@@ -1488,6 +1496,7 @@ class SettingsPage(QWidget):
         
         # 背景图片管理
         bg_label = QLabel("聊天背景图片:")
+        bg_label.setStyleSheet(f"color: {c['text']};")
         bg_label.setFont(QFont("Microsoft YaHei UI", 11))
         layout.addWidget(bg_label)
         
@@ -1651,7 +1660,7 @@ class SettingsPage(QWidget):
                 
                 # 处理图标路径
                 icon_path_to_save = ""
-                # 优先使用裁剪后的 QPixmap
+                # 优先使用裁剪后的 QPixmap（新上传的图标）
                 if hasattr(self, '_selected_icon_pixmap') and self._selected_icon_pixmap:
                     if is_edit:
                         icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, edit_key)
@@ -1662,19 +1671,17 @@ class SettingsPage(QWidget):
                         icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, temp_key)
                 # 兼容旧的文件路径方式
                 elif self._selected_icon_path:
-                    if is_edit:
-                        icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_path, edit_key)
-                    else:
-                        # 新建时使用临时 key，稍后会被替换
-                        from datetime import datetime
-                        temp_key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                        icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_path, temp_key)
+                    # 保留原有的自定义图标路径（编辑时未更改图标）
+                    icon_path_to_save = self._selected_icon_path
+                # 编辑模式下，如果原本有自定义图标但没有重新选择，保留原图标
+                elif is_edit and edit_data and edit_data.get('icon_path'):
+                    icon_path_to_save = edit_data.get('icon_path')
                 
                 if is_edit:
                     # 编辑模式
                     self.persona_edited.emit(
                         edit_key, name, persona_type,
-                        self._selected_icon if not (self._selected_icon_path or (hasattr(self, '_selected_icon_pixmap') and self._selected_icon_pixmap)) else "📷",
+                        self._selected_icon if not icon_path_to_save else "📷",
                         desc, prompt,
                         icon_path_to_save,
                         self._persona_backgrounds  # 添加背景图片列表
@@ -1685,7 +1692,7 @@ class SettingsPage(QWidget):
                     key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     self.persona_added.emit(
                         key, name, persona_type,
-                        self._selected_icon if not (self._selected_icon_path or (hasattr(self, '_selected_icon_pixmap') and self._selected_icon_pixmap)) else "📷",
+                        self._selected_icon if not icon_path_to_save else "📷",
                         desc, prompt,
                         icon_path_to_save,
                         self._persona_backgrounds  # 添加背景图片列表
@@ -1701,7 +1708,19 @@ class SettingsPage(QWidget):
         if hasattr(self, '_selected_icon_pixmap'):
             self._selected_icon_pixmap = None
         self._custom_icon_preview.setPixmap(QPixmap())
+        
+        # 取消所有按钮的选中状态
+        for icon_btn in self._icon_buttons:
+            icon_btn.setChecked(False)
+        
+        # 选中当前按钮
+        btn.setChecked(True)
+        
+        # 恢复自定义图标预览框的默认样式
         c = self.theme.colors
+        self._custom_icon_preview.setStyleSheet(f"border: 1px solid {c['border']}; border-radius: 8px;")
+        
+        # 更新样式
         self._update_icon_button_styles(c)
 
     def _update_icon_button_styles(self, c):
@@ -1753,7 +1772,13 @@ class SettingsPage(QWidget):
                     for btn in self._icon_buttons:
                         btn.setChecked(False)
                     
+                    # 高亮自定义图标预览框
                     c = self.theme.colors
+                    self._custom_icon_preview.setStyleSheet(f"""
+                        border: 2px solid {c['accent']};
+                        border-radius: 8px;
+                        background-color: {c['accent']}20;
+                    """)
                     self._update_icon_button_styles(c)
     
     def _add_persona_background(self, dialog):
@@ -2009,8 +2034,10 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("🔧 Ollama 服务")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         # 卡片 - 添加边框
@@ -2023,6 +2050,7 @@ class SettingsPage(QWidget):
         
         status_title = QLabel("服务状态")
         status_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
+        status_title.setStyleSheet(f"color: {c['text']};")
         card_layout.addWidget(status_title)
         
         self.ollama_status = StatusIndicator()
@@ -2060,8 +2088,10 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("💻 系统信息")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         # 硬件信息卡片 - 添加边框
@@ -2074,6 +2104,7 @@ class SettingsPage(QWidget):
 
         hw_title = QLabel("硬件配置")
         hw_title.setFont(QFont("Microsoft YaHei UI", 15, QFont.Bold))
+        hw_title.setStyleSheet(f"color: {c['text']};")
         hw_card_layout.addWidget(hw_title)
         
         self.hw_container = QWidget()
@@ -2094,6 +2125,7 @@ class SettingsPage(QWidget):
         
         tips_title = QLabel("💡 显存与模型推荐")
         tips_title.setFont(QFont("Microsoft YaHei UI", 15, QFont.Bold))
+        tips_title.setStyleSheet(f"color: {c['text']};")
         tips_layout.addWidget(tips_title)
         
         # 获取主题颜色
@@ -2101,13 +2133,13 @@ class SettingsPage(QWidget):
         
         # 创建推荐表格
         recommendations = [
-            ("4GB", "入门级", "🌱", "#28a745", "0.5B-3B", "Qwen3-0.6B, Llama-3.2-1B", "Q4/Q8"),
-            ("6GB", "进阶级", "📈", "#17a2b8", "1.5B-7B", "Qwen3-4B, DeepSeek-R1-1.5B", "Q4"),
-            ("8GB", "主流级", "⚡", "#007AFF", "3B-8B", "Qwen3-8B, GLM-Edge-4B", "Q4/Q5"),
+            ("4GB", "入门级", "🌱", "#007AFF", "0.5B-3B", "Qwen3-0.6B, Llama-3.2-1B", "Q4/Q8"),
+            ("6GB", "进阶级", "📱", "#17a2b8", "1.5B-7B", "Qwen3-4B, DeepSeek-R1-1.5B", "Q4"),
+            ("8GB", "主流级", "⚡", "#28a745", "3B-8B", "Qwen3-8B, GLM-Edge-4B", "Q4/Q5"),
             ("12GB", "性能级", "🚀", "#6f42c1", "8B-14B", "Qwen3-14B, DeepSeek-R1-14B", "Q4/Q5"),
-            ("16GB", "高端级", "💎", "#fd7e14", "14B-32B", "Qwen3-32B, DeepSeek-R1-32B", "Q4/Q5"),
-            ("24GB", "旗舰级", "👑", "#e83e8c", "32B-70B", "Llama-3-70B, Qwen3-70B", "Q4/Q5/Q8"),
-            ("40GB+", "专业级", "🏆", "#dc3545", "70B-405B", "Llama-3.1-405B, Qwen2.5-72B", "Q4/Q5/Q8"),
+            ("16GB", "高端级", "💎", "#e83e8c", "14B-32B", "Qwen3-32B, DeepSeek-R1-32B", "Q4/Q5"),
+            ("24GB", "旗舰级", "👑", "#dc3545", "32B-70B", "Llama-3-70B, Qwen3-70B", "Q4/Q5/Q8"),
+            ("40GB+", "专业级", "🏆", "#fd7e14", "70B-405B", "Llama-3.1-405B, Qwen2.5-72B", "Q4/Q5/Q8"),
         ]
         
         for vram, level, icon, color, params, models, quant in recommendations:
@@ -2212,11 +2244,14 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("📦 模型管理")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         desc = QLabel("下载并管理 AI 模型。根据您的硬件配置，仅显示可运行的模型。")
+        desc.setStyleSheet(f"color: {c['text_secondary']};")
         desc.setFont(QFont("Microsoft YaHei UI", 12))
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -2259,8 +2294,10 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("🎨 主题设置")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         # 卡片 - 添加边框
@@ -2272,6 +2309,7 @@ class SettingsPage(QWidget):
         card_layout.setSpacing(20)
         
         theme_title = QLabel("选择主题")
+        theme_title.setStyleSheet(f"color: {c['text']};")
         theme_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
         card_layout.addWidget(theme_title)
         
@@ -2303,8 +2341,10 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("👤 个性化")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         # 用户设置卡片 - 添加边框
@@ -2316,6 +2356,7 @@ class SettingsPage(QWidget):
         user_layout.setSpacing(15)
         
         user_title = QLabel("用户设置")
+        user_title.setStyleSheet(f"color: {c['text']};")
         user_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
         user_layout.addWidget(user_title)
         
@@ -2387,6 +2428,7 @@ class SettingsPage(QWidget):
         name_row = QHBoxLayout()
         name_row.setSpacing(10)
         name_label = QLabel("显示名称:")
+        name_label.setStyleSheet(f"color: {c['text']};")
         name_label.setFont(QFont("Microsoft YaHei UI", 11))
         name_row.addWidget(name_label)
         
@@ -2412,10 +2454,12 @@ class SettingsPage(QWidget):
         bg_layout.setSpacing(15)
         
         bg_title = QLabel("聊天背景")
+        bg_title.setStyleSheet(f"color: {c['text']};")
         bg_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
         bg_layout.addWidget(bg_title)
         
         bg_desc = QLabel("添加多张背景图片，聊天时自动轮播（推荐比例4:3）")
+        bg_desc.setStyleSheet(f"color: {c['text_secondary']};")
         bg_desc.setFont(QFont("Microsoft YaHei UI", 11))
         bg_desc.setObjectName("descLabel")
         bg_layout.addWidget(bg_desc)
@@ -2480,6 +2524,7 @@ class SettingsPage(QWidget):
         
         # 轮播间隔设置
         interval_label = QLabel("轮播间隔:")
+        interval_label.setStyleSheet(f"color: {c['text']};")
         interval_label.setFont(QFont("Microsoft YaHei UI", 11))
         bg_btn_row.addWidget(interval_label)
         
@@ -2568,11 +2613,14 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         
         # 标题
+        c = self.theme.colors
         title = QLabel("🎭 助手与角色")
         title.setFont(QFont("Microsoft YaHei UI", 22, QFont.Bold))
+        title.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(title)
         
         desc = QLabel("创建专业协作助手或有趣的角色扮演，让 AI 更懂你")
+        desc.setStyleSheet(f"color: {c['text_secondary']};")
         desc.setFont(QFont("Microsoft YaHei UI", 12))
         layout.addWidget(desc)
         
@@ -2746,9 +2794,11 @@ class SettingsPage(QWidget):
         
         layout.addWidget(preview)
         
+        c = self.theme.colors
         label = QLabel(theme['display_name'])
         label.setFont(QFont("Microsoft YaHei UI", 13, QFont.Bold))
         label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet(f"color: {c['text']};")
         layout.addWidget(label)
         
         btn.mousePressEvent = lambda e, n=name: self.on_theme_selected(n)
@@ -3082,6 +3132,29 @@ class SettingsPage(QWidget):
         if hasattr(self, 'theme_buttons'):
             self.update_theme_selection()
         
+        # 更新所有标题和标签的颜色（遍历所有QLabel）
+        for label in self.scroll_container.findChildren(QLabel):
+            # 跳过已有特殊样式的标签
+            if label.styleSheet() and ('background-color' in label.styleSheet() or 'border' in label.styleSheet()):
+                continue
+            
+            # 根据字体大小判断是标题还是普通文本
+            font = label.font()
+            if font.pointSize() >= 20:  # 大标题 (22px)
+                label.setStyleSheet(f"color: {c['text']};")
+            elif font.pointSize() >= 14:  # 中标题 (14-15px)
+                label.setStyleSheet(f"color: {c['text']};")
+            elif font.pointSize() >= 11:  # 小标题/标签 (11-13px)
+                # 检查是否是次要文本
+                if 'secondary' in label.objectName() or 'desc' in label.objectName().lower():
+                    label.setStyleSheet(f"color: {c['text_secondary']};")
+                else:
+                    label.setStyleSheet(f"color: {c['text']};")
+        
+        # 更新导航标题
+        if hasattr(self, 'nav_title'):
+            self.nav_title.setStyleSheet(f"color: {c['text']};")
+        
         # 刷新助手卡片样式（不重新创建，只更新样式）
         logger.info("准备更新助手卡片样式...")
         logger.debug(f"assistants_container 存在: {hasattr(self, 'assistants_container')}")
@@ -3094,6 +3167,11 @@ class SettingsPage(QWidget):
         
         # 更新主题选择
         self.update_theme_selection()
+        
+        # 刷新硬件配置显示（如果已有数据）
+        if self.hardware_info:
+            logger.info("刷新硬件配置显示以适配新主题")
+            self.update_hardware_info(self.hardware_info)
         
         logger.info("apply_theme 完成")
     
@@ -3230,50 +3308,50 @@ class SettingsPage(QWidget):
         if vram_gb >= 40:
             return {
                 'name': '专业级',
-                'emoji': '👑',
-                'color': '#ff6f00',  # 深橙色/金色
+                'emoji': '🏆',
+                'color': '#dc3545',
                 'desc': '专业级显卡（H100/A100），可运行超大模型（70B+）'
             }
         elif vram_gb >= 24:
             return {
                 'name': '旗舰级',
-                'emoji': '🚀',
-                'color': '#9c27b0',  # 紫色
+                'emoji': '👑',
+                'color': '#e83e8c',
                 'desc': '可运行大型模型（32B-70B）'
             }
         elif vram_gb >= 16:
             return {
                 'name': '高端级',
                 'emoji': '💎',
-                'color': '#2196f3',  # 蓝色
+                'color': '#fd7e14',
                 'desc': '可运行中大型模型（14B-32B）'
             }
         elif vram_gb >= 12:
             return {
                 'name': '性能级',
-                'emoji': '⚡',
-                'color': '#00bcd4',  # 青色
+                'emoji': '🚀',
+                'color': '#6f42c1',
                 'desc': '可运行中型模型（8B-14B）'
             }
         elif vram_gb >= 8:
             return {
                 'name': '主流级',
-                'emoji': '✨',
-                'color': '#4caf50',  # 绿色
+                'emoji': '⚡',
+                'color': '#007AFF',
                 'desc': '可运行小型模型（3B-8B）'
             }
         elif vram_gb >= 6:
             return {
                 'name': '进阶级',
                 'emoji': '📱',
-                'color': '#ff9800',  # 橙色
+                'color': '#17a2b8',
                 'desc': '可运行轻量模型（1.5B-7B）'
             }
         elif vram_gb >= 4:
             return {
                 'name': '入门级',
                 'emoji': '🌱',
-                'color': '#ffc107',  # 黄色
+                'color': '#28a745',  # 黄色
                 'desc': '可运行超轻量模型（0.5B-3B）'
             }
         elif vram_gb > 0:
