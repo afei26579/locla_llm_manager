@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "name": "light",
+    "display_name": "浅色",
+    "version": "1.0.0",
+    "author": "System",
+    "description": "默认浅色主题",
+    "base": null
+  },
+  "colors": {
+    "background": {
+      "primary": "#f5f5f7",
+      "secondary": "#ffffff",
+      "tertiary": "#e8e8ed"
+    },
+    "surface": {
+      "card": "#ffffff",
+      "input": "#ffffff",
+      "hover": "#e8e8ed",
+      "active": "#d1d1d6"
+    },
+    "border": {
+      "default": "#c7c7cc",
+      "focus": "#007AFF"
+    },
+    "accent": {
+      "primary": "#007AFF",
+      "hover": "#0056b3",
+      "light": "#40a9ff"
+    },
+    "text": {
+      "primary": "#1d1d1f",
+      "secondary": "#48484a",
+      "dim": "#6e6e73"
+    },
+    "semantic": {
+      "success": "#28a745",
+      "warning": "#fd7e14",
+      "error": "#dc3545",
+      "info": "#007AFF"
+    },
+    "chat": {
+      "user_bubble": "#007AFF",
+      "ai_bubble": "#e8e8ed"
+    },
+    "scrollbar": {
+      "track": "transparent",
+      "thumb": "#c7c7cc",
+      "thumb_hover": "#a9a9ae"
+    },
+    "sidebar": {
+      "background": "#ffffff"
+    },
+    "notification": {
+      "background": "#ffffff"
+    },
+    "settings": {
+      "nav_bg": "#e8e8ed",
+      "nav_active": "#ffffff"
+    },
+    "progress": {
+      "background": "#e8e8ed",
+      "fill": "#007AFF"
+    },
+    "info_row": {
+      "background": "#f0f0f5"
+    }
+  },
+  "typography": {
+    "font_family": "Microsoft YaHei UI, SF Pro Display, -apple-system, sans-serif",
+    "font_size": {
+      "small": 10,
+      "normal": 13,
+      "medium": 14,
+      "large": 16,
+      "xlarge": 20
+    },
+    "font_weight": {
+      "normal": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "xxl": 32
+  },
+  "radius": {
+    "small": 6,
+    "medium": 10,
+    "large": 16,
+    "xlarge": 20,
+    "round": 9999
+  }
+}
