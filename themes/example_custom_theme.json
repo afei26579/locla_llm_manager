@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "name": "ocean_blue",
+    "display_name": "海洋蓝",
+    "version": "1.0.0",
+    "author": "Example",
+    "description": "基于深色主题的海洋蓝配色方案",
+    "base": "dark"
+  },
+  "colors": {
+    "accent": {
+      "primary": "#00B4D8",
+      "hover": "#0096C7",
+      "light": "#48CAE4"
+    },
+    "semantic": {
+      "success": "#06FFA5",
+      "warning": "#FFB703",
+      "error": "#F72585",
+      "info": "#00B4D8"
+    },
+    "chat": {
+      "user_bubble": "#00B4D8",
+      "ai_bubble": "#023E8A"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+modelscope
+requests 
+psutil
+PySide6

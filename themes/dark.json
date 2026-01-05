@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "name": "dark",
+    "display_name": "深色",
+    "version": "1.0.0",
+    "author": "System",
+    "description": "默认深色主题",
+    "base": null
+  },
+  "colors": {
+    "background": {
+      "primary": "#1e1e1e",
+      "secondary": "#252526",
+      "tertiary": "#2d2d2d"
+    },
+    "surface": {
+      "card": "#2d2d2d",
+      "input": "#3c3c3c",
+      "hover": "#3c3c3c",
+      "active": "#454545"
+    },
+    "border": {
+      "default": "#3d3d3d",
+      "focus": "#007AFF"
+    },
+    "accent": {
+      "primary": "#007AFF",
+      "hover": "#0056b3",
+      "light": "#0a84ff"
+    },
+    "text": {
+      "primary": "#e8e8e8",
+      "secondary": "#b0b0b0",
+      "dim": "#909090",
+      "placeholder": "#707070"
+    },
+    "semantic": {
+      "success": "#30d158",
+      "warning": "#ff9f0a",
+      "error": "#ff453a",
+      "info": "#007AFF"
+    },
+    "chat": {
+      "user_bubble": "#007AFF",
+      "ai_bubble": "#3a3a3c"
+    },
+    "scrollbar": {
+      "track": "transparent",
+      "thumb": "#4a4a4a",
+      "thumb_hover": "#5a5a5a"
+    },
+    "sidebar": {
+      "background": "#252526"
+    },
+    "notification": {
+      "background": "#1c1c1e"
+    },
+    "settings": {
+      "nav_bg": "#1c1c1e",
+      "nav_active": "#2d2d2d"
+    },
+    "progress": {
+      "background": "#3a3a3c",
+      "fill": "#007AFF"
+    },
+    "info_row": {
+      "background": "#353535"
+    }
+  },
+  "typography": {
+    "font_family": "Microsoft YaHei UI, SF Pro Display, -apple-system, sans-serif",
+    "font_size": {
+      "small": 10,
+      "normal": 13,
+      "medium": 14,
+      "large": 16,
+      "xlarge": 20
+    },
+    "font_weight": {
+      "normal": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "xxl": 32
+  },
+  "radius": {
+    "small": 6,
+    "medium": 10,
+    "large": 16,
+    "xlarge": 20,
+    "round": 9999
+  }
+}

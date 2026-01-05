@@ -1,0 +1,9 @@
+{
+  "app_name": "本地大模型助手",
+  "version": "1.0.0",
+  "ollama_host": "127.0.0.1",
+  "ollama_port": 11434,
+  "language": "zh_CN",
+  "theme": "light",
+  "debug": true
+}

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 数据库
+data.db
+*.db
+
+# 日志
+logs/
+*.log
+Modelfile_*
+
+# 用户数据
+media/
+models/
+runtime/
+ollama_models/
+.initialized
+
+# IDE
+.vscode/
+.kiro/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 特殊资源
+models.json
+personas.json
