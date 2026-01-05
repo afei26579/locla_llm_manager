@@ -10,7 +10,7 @@ import os
 
 from .themes import get_theme_manager
 from .components import ChatBubble
-from .suggestion_buttons import SuggestionButtonGroup
+from .suggestion_buttons import SuggestionButtonGroup, SuggestionLoadingWidget
 from .chat_settings_panel import CollapsiblePanel
 
 
@@ -19,6 +19,7 @@ class ChatPage(QWidget):
     
     settings_clicked = Signal()
     send_message = Signal(str, dict)  # 消息文本, 模型参数
+    stop_generation = Signal()  # 停止生成信号
     model_changed = Signal(str)
     new_chat_with_persona = Signal(str)  # 新增
     request_suggestions = Signal(str)  # 请求生成推荐选项（传递最后一条 AI 消息）
@@ -27,6 +28,7 @@ class ChatPage(QWidget):
         super().__init__(parent)
         self.current_ai_bubble = None
         self.theme = get_theme_manager()
+        self._is_generating = False  # 跟踪生成状态
         
         # 用户和 AI 配置
         self.user_name = "我"
@@ -158,8 +160,8 @@ class ChatPage(QWidget):
         self.input_text.installEventFilter(self)
         input_layout.addWidget(self.input_text)
         
-        self.send_btn = QPushButton("发送")
-        self.send_btn.setFixedSize(80, 45)
+        self.send_btn = QPushButton("发送 ➤")
+        self.send_btn.setFixedSize(90, 45)
         self.send_btn.setFont(QFont("Microsoft YaHei UI", 13, QFont.Bold))
         self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self.on_send_clicked)
@@ -1064,7 +1066,8 @@ class ChatPage(QWidget):
             avatar_path=self.ai_avatar_path,
             icon=self.ai_icon,
             timestamp=datetime.now().isoformat(),
-            is_roleplay=self.is_roleplay
+            is_roleplay=self.is_roleplay,
+            is_streaming=True  # 标记为流式响应，启用加载动画
         )
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, self.current_ai_bubble)
         self.scroll_to_bottom()
@@ -1084,13 +1087,51 @@ class ChatPage(QWidget):
         if not suggestions:
             return
         
+        # 先清除已有的推荐按钮组和加载状态
+        self.clear_suggestion_buttons()
+        
         btn_group = SuggestionButtonGroup(suggestions, self)
+        btn_group.setObjectName("suggestionGroup")
         btn_group.button_clicked.connect(self._on_suggestion_clicked)
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, btn_group)
         self.scroll_to_bottom()
     
+    def show_suggestion_loading(self):
+        """显示推荐选项加载中状态"""
+        # 先清除已有的
+        self.clear_suggestion_buttons()
+        
+        loading = SuggestionLoadingWidget(self)
+        loading.setObjectName("suggestionLoading")
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, loading)
+        self.scroll_to_bottom()
+    
+    def hide_suggestion_loading(self):
+        """隐藏推荐选项加载状态"""
+        for i in range(self.chat_layout.count() - 1, -1, -1):
+            item = self.chat_layout.itemAt(i)
+            if item and item.widget():
+                widget = item.widget()
+                if widget.objectName() == "suggestionLoading":
+                    widget.stop()
+                    widget.deleteLater()
+    
+    def clear_suggestion_buttons(self):
+        """清除所有推荐选项按钮组和加载状态"""
+        for i in range(self.chat_layout.count() - 1, -1, -1):
+            item = self.chat_layout.itemAt(i)
+            if item and item.widget():
+                widget = item.widget()
+                if widget.objectName() in ("suggestionGroup", "suggestionLoading"):
+                    if hasattr(widget, 'stop'):
+                        widget.stop()
+                    widget.deleteLater()
+    
     def _on_suggestion_clicked(self, text: str):
         """点击推荐选项后自动发送"""
+        # 先清除推荐按钮组
+        self.clear_suggestion_buttons()
+        # 填入文本并发送
         self.input_text.setPlainText(text)
         self.on_send_clicked()
     
@@ -1264,14 +1305,98 @@ class ChatPage(QWidget):
     
     @Slot(bool)
     def set_send_enabled(self, enabled: bool):
-        self.send_btn.setEnabled(enabled)
+        self._is_generating = not enabled
         self.input_text.setEnabled(enabled)
+        
         if enabled:
-            self.send_btn.setText("发送")
+            # 恢复发送状态
+            self.send_btn.setText("发送 ➤")
+            self.send_btn.setEnabled(True)
             self.input_text.setPlaceholderText("输入消息，按 Enter 发送...")
+            try:
+                self.send_btn.clicked.disconnect()
+            except:
+                pass
+            self.send_btn.clicked.connect(self.on_send_clicked)
+            self._apply_send_btn_style()
         else:
-            self.send_btn.setText("生成中...")
+            # 生成中状态 - 显示停止按钮
+            self.send_btn.setText("⏹ 停止")
+            self.send_btn.setEnabled(True)  # 保持可点击
             self.input_text.setPlaceholderText("AI 正在回复中...")
+            try:
+                self.send_btn.clicked.disconnect()
+            except:
+                pass
+            self.send_btn.clicked.connect(self._on_stop_clicked)
+            self._apply_stop_btn_style()
+    
+    def _on_stop_clicked(self):
+        """点击停止按钮"""
+        # 禁用按钮并显示停止中状态
+        self.send_btn.setText("停止中...")
+        self.send_btn.setEnabled(False)
+        self._apply_stopping_btn_style()
+        self.stop_generation.emit()
+    
+    def _apply_send_btn_style(self):
+        """应用发送按钮样式"""
+        c = self.theme.colors
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c['accent']};
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {c['accent_hover']};
+            }}
+            QPushButton:pressed {{
+                background-color: {c['accent']};
+            }}
+            QPushButton:disabled {{
+                background-color: {c['border']};
+                color: {c['text_secondary']};
+            }}
+        """)
+    
+    def _apply_stop_btn_style(self):
+        """应用停止按钮样式"""
+        c = self.theme.colors
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #c82333;
+            }}
+            QPushButton:pressed {{
+                background-color: #bd2130;
+            }}
+        """)
+    
+    def _apply_stopping_btn_style(self):
+        """应用停止中按钮样式（禁用状态）"""
+        c = self.theme.colors
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:disabled {{
+                background-color: #6c757d;
+                color: #adb5bd;
+            }}
+        """)
     
     def update_models(self, models: list):
         """更新模型列表"""

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QProgressBar, QComboBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
 
 from .themes import get_theme_manager
@@ -125,7 +125,7 @@ class ChatBubble(QFrame):
     def __init__(self, text: str, is_user: bool = False, 
                  name: str = None, avatar_path: str = None, 
                  icon: str = None, timestamp: str = None, 
-                 is_roleplay: bool = False, parent=None):
+                 is_roleplay: bool = False, is_streaming: bool = False, parent=None):
         super().__init__(parent)
         self.is_user = is_user
         self.text = text
@@ -135,8 +135,18 @@ class ChatBubble(QFrame):
         self.timestamp = timestamp
         self.is_roleplay = is_roleplay  # 是否是角色扮演模式
         self.theme = get_theme_manager()
+        
+        # 加载动画相关 - 只有流式响应且文本为空时才启动
+        self._loading_timer = None
+        self._loading_dots = 0
+        self._is_loading = is_streaming and not text  # 只有流式模式且初始文本为空才显示加载动画
+        
         self.setup_ui()
         self.theme.theme_changed.connect(self.apply_theme)
+        
+        # 如果是流式模式且空文本，启动加载动画
+        if self._is_loading and not is_user:
+            self._start_loading_animation()
     
     def setup_ui(self):
         layout = QHBoxLayout(self)
@@ -335,12 +345,43 @@ class ChatBubble(QFrame):
         if hasattr(self, 'time_label'):
             self.time_label.setStyleSheet(f"color: {c['text_dim']};")
     
+    def _start_loading_animation(self):
+        """启动加载动画"""
+        self._loading_timer = QTimer(self)
+        self._loading_timer.timeout.connect(self._update_loading_dots)
+        self._loading_timer.start(400)
+        self._update_loading_dots()
+    
+    def _stop_loading_animation(self):
+        """停止加载动画"""
+        if self._loading_timer:
+            self._loading_timer.stop()
+            self._loading_timer = None
+        self._is_loading = False
+    
+    def _update_loading_dots(self):
+        """更新加载动画的点"""
+        dots = ["⬤ ○ ○", "○ ⬤ ○", "○ ○ ⬤"]
+        self._loading_dots = (self._loading_dots + 1) % 3
+        self.message_label.setText(dots[self._loading_dots])
+    
     def update_text(self, text: str):
         """更新消息文本（支持流式更新）"""
-        self.text = text
-        
+        # 过滤思考内容后检查是否有实际可见内容
         if not self.is_user:
             think_content, main_content = extract_think_content(text)
+            display_text = main_content if self.is_roleplay else main_content
+            
+            # 只有有实际可见内容时才停止加载动画
+            if not display_text or not display_text.strip():
+                # 没有可见内容，保持加载动画
+                return
+            
+            # 收到实际内容后停止加载动画
+            if self._is_loading:
+                self._stop_loading_animation()
+            
+            self.text = text
             
             # 角色扮演模式下不显示思考内容
             if self.is_roleplay:
@@ -358,6 +399,11 @@ class ChatBubble(QFrame):
                 
                 self.message_label.setText(main_content)
         else:
+            if not text or not text.strip():
+                return
+            if self._is_loading:
+                self._stop_loading_animation()
+            self.text = text
             self.message_label.setText(text)
     
     def _create_think_bubble(self, think_content: str):

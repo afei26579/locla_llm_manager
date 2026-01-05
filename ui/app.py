@@ -26,7 +26,7 @@ from core.model_manager import ModelManager
 from core.chat_db import ChatManager
 
 from .themes import get_theme_manager, get_stylesheet
-from .components import HistoryItem, StatusIndicator
+from .components import HistoryItem
 from .chat_page import ChatPage
 from .settings_page import SettingsPage
 
@@ -41,13 +41,25 @@ class WorkerThread(QThread):
         self.func = func
         self.args = args
         self.kwargs = kwargs
+        self._is_cancelled = False
+    
+    def cancel(self):
+        """标记线程为取消状态"""
+        self._is_cancelled = True
+    
+    @property
+    def is_cancelled(self):
+        return self._is_cancelled
     
     def run(self):
         try:
-            result = self.func(*self.args, **self.kwargs)
-            self.finished.emit(result)
+            if not self._is_cancelled:
+                result = self.func(*self.args, **self.kwargs)
+                if not self._is_cancelled:
+                    self.finished.emit(result)
         except Exception as e:
-            self.finished.emit(e)
+            if not self._is_cancelled:
+                self.finished.emit(e)
 
 
 class MainWindow(QMainWindow):
@@ -64,7 +76,9 @@ class MainWindow(QMainWindow):
         self.current_chat_id = None
         self.current_history_item = None
         self.worker = None
+        self.chat_worker = None  # 聊天专用线程
         self.suggestion_worker = None  # 推荐生成线程
+        self._stop_requested = False  # 停止生成标志
         self.current_download_model = None
         
         self.setup_ui()
@@ -210,9 +224,11 @@ class MainWindow(QMainWindow):
         self.ollama_quick_layout.setSpacing(8)
         
         # 状态标签
-        self.ollama_status_label = QLabel("")
+        self.ollama_status_label = QLabel("● 检测中...")
         self.ollama_status_label.setFont(QFont("Microsoft YaHei UI", 10))
         self.ollama_status_label.setAlignment(Qt.AlignCenter)
+        c = self.theme.colors
+        self.ollama_status_label.setStyleSheet(f"color: {c['text_secondary']};")
         self.ollama_quick_layout.addWidget(self.ollama_status_label)
         
         # 快捷按钮
@@ -328,21 +344,10 @@ class MainWindow(QMainWindow):
         webbrowser.open("https://ollama.com/download")
 
     def create_sidebar_footer(self, parent_layout):
-        """创建侧边栏底部（移除模型状态显示）"""
-        footer = QWidget()
-        footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 10, 0, 0)
-        footer_layout.setSpacing(10)
-        
+        """创建侧边栏底部分隔线"""
         separator = QFrame()
         separator.setFixedHeight(1)
-        footer_layout.addWidget(separator)
-        
-        # 只保留 Ollama 服务状态
-        self.status_indicator = StatusIndicator()
-        footer_layout.addWidget(self.status_indicator)
-        
-        parent_layout.addWidget(footer)
+        parent_layout.addWidget(separator)
     
     def create_notification_bar(self, parent_layout):
         """通知栏"""
@@ -523,6 +528,7 @@ class MainWindow(QMainWindow):
         """连接信号"""
         self.chat_page.settings_clicked.connect(self.show_settings)
         self.chat_page.send_message.connect(self.send_message)
+        self.chat_page.stop_generation.connect(self.stop_generation)
         self.chat_page.model_changed.connect(self.on_model_changed)
         
         self.settings_page.back_clicked.connect(self.show_chat)
@@ -890,7 +896,8 @@ class MainWindow(QMainWindow):
         """启动检查完成"""
         if isinstance(result, Exception):
             self.set_notification(f"检测失败: {result}", "error")
-            self.status_indicator.set_status("error", "检测失败")
+            self.ollama_status_label.setText("● 检测失败")
+            self.ollama_status_label.setStyleSheet(f"color: {c['error']};")
             return
         
         hw_info = result.get('hw_info')
@@ -907,11 +914,9 @@ class MainWindow(QMainWindow):
         self.update_ollama_quick_status(installed, running)
         
         if running:
-            self.status_indicator.set_status("success", "运行中")
-            
             # 如果是自动启动的，显示提示
             if auto_started:
-                self.set_notification("✅ Ollama 已自动启动", "success")
+                self.set_notification("✅ 模型引擎 已自动启动", "success")
             else:
                 self.set_notification("✅ 系统就绪", "success")
             
@@ -923,13 +928,11 @@ class MainWindow(QMainWindow):
                 model_name = models[0]['name']
                 self.chat_manager.set_model(model_name)
         elif installed:
-            self.status_indicator.set_status("warning", "未运行")
             if start_error:
                 self.set_notification(f"⚠️ Ollama 自动启动失败: {start_error}", "warning")
             else:
                 self.set_notification("Ollama 已安装但未运行，点击左下角启动", "")
         else:
-            self.status_indicator.set_status("error", "未安装")
             self.set_notification("Ollama 未找到", "error")
         
         # 初始化人格
@@ -1254,12 +1257,19 @@ class MainWindow(QMainWindow):
             text: 消息文本
             model_options: 模型参数 (temperature, top_p, etc.)
         """
+        logger.info(f"send_message 被调用: text={text[:50]}...")
+        
         if not self.chat_manager.current_model:
             QMessageBox.warning(self, "提示", "请先选择模型")
             return
         
         if self.chat_manager.is_generating:
+            logger.info("send_message: 正在生成中，跳过")
             return
+        
+        # 重置停止标志
+        self._stop_requested = False
+        self.chat_manager.stop_requested = False
         
         # 如果是新对话，先创建
         if not self.current_chat_id:
@@ -1283,17 +1293,31 @@ class MainWindow(QMainWindow):
             )
         
         def do_chat():
-            return self.chat_manager.chat(text, stream_callback=stream_callback, options=model_options)
+            logger.info("do_chat 开始执行")
+            result = self.chat_manager.chat(text, stream_callback=stream_callback, options=model_options)
+            logger.info(f"do_chat 执行完成: result={result}")
+            return result
         
-        self.worker = WorkerThread(do_chat)
-        self.worker.finished.connect(self.on_chat_done)
-        self.worker.start()
+        self.chat_worker = WorkerThread(do_chat)  # 使用独立的 worker
+        self.chat_worker.finished.connect(self.on_chat_done)
+        logger.info("send_message: 启动 chat_worker")
+        self.chat_worker.start()
+    
+    @Slot()
+    def stop_generation(self):
+        """停止生成"""
+        logger.info("stop_generation: 用户请求停止生成")
+        self._stop_requested = True
+        self.chat_manager.stop_requested = True
+        self.set_notification("正在停止...", "")
 
     @Slot(object)
     def on_chat_done(self, result):
         """聊天完成回调"""
         self.chat_page.finish_ai_response()
         self.chat_page.set_send_enabled(True)
+        
+        logger.info(f"on_chat_done: result type={type(result)}, is_exception={isinstance(result, Exception)}")
         
         if isinstance(result, Exception):
             self.set_notification(f"生成失败: {result}", "error")
@@ -1311,8 +1335,10 @@ class MainWindow(QMainWindow):
             
             # 如果是角色扮演且启用了推荐回复，生成推荐选项
             persona = self.chat_manager.get_current_persona()
+            logger.info(f"检查推荐生成: type={persona.get('type')}, enable_suggestions={persona.get('enable_suggestions', True)}")
             if persona.get('type') == 'roleplay' and persona.get('enable_suggestions', True):
                 # 延迟生成，避免阻塞 UI
+                logger.info("触发 generate_suggestions")
                 QTimer.singleShot(500, self.generate_suggestions)
     
     def generate_suggestions(self):
@@ -1320,6 +1346,7 @@ class MainWindow(QMainWindow):
         # 获取最后一条 AI 消息
         messages = self.chat_manager.get_all_messages_sorted()
         if not messages:
+            logger.info("generate_suggestions: 没有消息")
             return
         
         last_ai_msg = None
@@ -1329,34 +1356,53 @@ class MainWindow(QMainWindow):
                 break
         
         if not last_ai_msg:
+            logger.info("generate_suggestions: 没有 AI 消息")
             return
         
         # 获取角色配置
         persona = self.chat_manager.get_current_persona()
         greeting_config = self.chat_manager.get_role_greeting(persona.get('key', ''))
+        greeting = greeting_config.get('greeting', '')
         scenarios = greeting_config.get('scenarios', [])
         
-        # 优先使用预设场景作为推荐（快速、可靠）
-        if scenarios:
-            # 直接使用预设场景
-            self.chat_page.add_suggestion_buttons(scenarios)
+        # 判断是否是问候语回复（对话中只有一条 AI 消息）
+        ai_msg_count = sum(1 for msg in messages if msg.get('role') == 'assistant')
+        is_greeting_reply = ai_msg_count == 1 and greeting
+        
+        logger.info(f"generate_suggestions: ai_msg_count={ai_msg_count}, greeting={bool(greeting)}, scenarios={len(scenarios)}, is_greeting_reply={is_greeting_reply}")
+        
+        if is_greeting_reply:
+            # 问候语回复：使用预设场景（如果有）
+            if scenarios:
+                self.chat_page.add_suggestion_buttons(scenarios)
+            # 没有预设场景则不显示推荐
             return
         
-        # 如果没有预设场景，尝试 LLM 生成（可能超时）
+        # 非问候语回复：使用 LLM 生成推荐
+        logger.info("generate_suggestions: 开始 LLM 生成推荐")
+        
         # 如果已有推荐生成线程在运行，先停止
         if self.suggestion_worker and self.suggestion_worker.isRunning():
             self.suggestion_worker.quit()
             self.suggestion_worker.wait(500)
         
+        # 显示加载状态
+        self.chat_page.show_suggestion_loading()
+        
         # 在后台线程生成推荐
         def generate():
             try:
-                return self.chat_manager.generate_suggestions(last_ai_msg['content'], count=3)
+                result = self.chat_manager.generate_suggestions(last_ai_msg['content'], count=3)
+                logger.info(f"generate_suggestions: LLM 返回 {result}")
+                return result
             except Exception as e:
                 logger.error(f"生成推荐选项异常: {e}")
                 return []
         
         def on_generated(suggestions):
+            logger.info(f"generate_suggestions: on_generated 收到 {suggestions}")
+            # 先隐藏加载状态
+            self.chat_page.hide_suggestion_loading()
             if suggestions:
                 self.chat_page.add_suggestion_buttons(suggestions)
             # 如果没有生成推荐，静默失败，不影响用户体验
@@ -1398,7 +1444,7 @@ class MainWindow(QMainWindow):
         if isinstance(result, tuple):
             success, msg = result
             if success:
-                self.status_indicator.set_status("success", "运行中")
+                self.update_ollama_quick_status(True, True)
                 self.settings_page.update_ollama_status(True, True)
                 self.set_notification("Ollama 服务已启动", "success")
                 
@@ -1416,12 +1462,11 @@ class MainWindow(QMainWindow):
         self.refresh_settings_data()
         
         running = self.ollama.is_running()
+        installed = self.ollama.is_installed()
+        self.update_ollama_quick_status(installed, running)
         if running:
-            self.status_indicator.set_status("success", "运行中")
             models = self.ollama.list_models()
             self.chat_page.update_models(models)
-        else:
-            self.status_indicator.set_status("warning", "未运行")
         
         self.set_notification("已刷新状态", "")
     
@@ -1928,24 +1973,55 @@ class MainWindow(QMainWindow):
         self.notification_label.setText(display_text)
     
     def closeEvent(self, event):
-        """关闭事件"""
-        # 停止所有后台线程
-        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
-            self.worker.quit()
-            self.worker.wait(1000)  # 等待最多 1 秒
+        """关闭事件 - 确保所有后台线程和进程都被终止"""
+        import os
+        import signal
         
-        if hasattr(self, 'suggestion_worker') and self.suggestion_worker and self.suggestion_worker.isRunning():
-            self.suggestion_worker.quit()
-            self.suggestion_worker.wait(1000)
+        logger.info("[退出] 开始清理资源...")
+        
+        # 收集所有需要停止的线程
+        workers = [
+            ('worker', self.worker if hasattr(self, 'worker') else None),
+            ('chat_worker', self.chat_worker if hasattr(self, 'chat_worker') else None),
+            ('suggestion_worker', self.suggestion_worker if hasattr(self, 'suggestion_worker') else None),
+        ]
+        
+        # 停止所有后台线程
+        for name, worker in workers:
+            if worker and worker.isRunning():
+                logger.info(f"[退出] 停止线程: {name}")
+                worker.cancel()  # 标记取消
+                worker.quit()
+                if not worker.wait(1500):  # 等待 1.5 秒
+                    logger.warning(f"[退出] 线程 {name} 未能正常退出，强制终止")
+                    worker.terminate()
+                    worker.wait(500)
         
         # 停止 Ollama 服务
-        self.ollama.stop_service()
+        logger.info("[退出] 停止 Ollama 服务")
+        try:
+            self.ollama.stop_service()
+        except Exception as e:
+            logger.error(f"[退出] 停止 Ollama 服务失败: {e}")
         
         # 关闭数据库连接
+        logger.info("[退出] 关闭数据库连接")
         if hasattr(self, 'chat_manager') and self.chat_manager:
-            self.chat_manager.db.close()
+            try:
+                self.chat_manager.db.close()
+            except Exception as e:
+                logger.error(f"[退出] 关闭数据库失败: {e}")
         
+        logger.info("[退出] 清理完成，退出应用")
         event.accept()
+        
+        # 强制结束当前进程（确保没有残留）
+        if sys.platform == 'win32':
+            # Windows: 使用 os._exit 强制退出
+            QTimer.singleShot(100, lambda: os._exit(0))
+        else:
+            # Linux/Mac: 发送 SIGTERM
+            QTimer.singleShot(100, lambda: os.kill(os.getpid(), signal.SIGTERM))
 
 
 def main():

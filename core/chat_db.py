@@ -153,6 +153,70 @@ def extract_think_content(text: str) -> tuple:
     return think_content, main_content
 
 
+class RepeatDetector:
+    """检测 LLM 输出中的重复内容"""
+    
+    def __init__(self, min_pattern_len: int = 20, max_repeats: int = 3):
+        """
+        Args:
+            min_pattern_len: 最小重复模式长度
+            max_repeats: 允许的最大重复次数
+        """
+        self.min_pattern_len = min_pattern_len
+        self.max_repeats = max_repeats
+        self.detected_pattern = None
+        self.first_occurrence = 0
+    
+    def check(self, text: str) -> bool:
+        """检查文本是否包含重复内容
+        
+        Returns:
+            True 如果检测到过多重复
+        """
+        if len(text) < self.min_pattern_len * 2:
+            return False
+        
+        # 只检查最后一部分文本，提高效率
+        check_len = min(len(text), 2000)
+        check_text = text[-check_len:]
+        
+        # 尝试不同长度的模式
+        for pattern_len in range(self.min_pattern_len, min(200, len(check_text) // 2)):
+            # 从末尾取一个模式
+            pattern = check_text[-pattern_len:]
+            
+            # 计算这个模式在文本中出现的次数
+            count = 0
+            pos = 0
+            first_pos = -1
+            while True:
+                found = check_text.find(pattern, pos)
+                if found == -1:
+                    break
+                if first_pos == -1:
+                    first_pos = found
+                count += 1
+                pos = found + 1
+            
+            if count >= self.max_repeats:
+                self.detected_pattern = pattern
+                # 计算在原文中的位置
+                self.first_occurrence = len(text) - check_len + first_pos
+                logger.warning(f"[重复检测] 发现重复模式: 长度={pattern_len}, 次数={count}")
+                logger.debug(f"[重复检测] 模式内容: {pattern[:50]}...")
+                return True
+        
+        return False
+    
+    def truncate(self, text: str) -> str:
+        """截断重复部分，保留第一次出现的内容"""
+        if self.detected_pattern and self.first_occurrence > 0:
+            # 保留到第一次重复结束的位置
+            truncate_pos = self.first_occurrence + len(self.detected_pattern)
+            return text[:truncate_pos].rstrip()
+        return text
+
+
 class ChatManager:
     """聊天管理器（数据库版本）"""
     
@@ -163,6 +227,7 @@ class ChatManager:
         self.current_model = None
         self.current_chat_id = None
         self.is_generating = False
+        self.stop_requested = False  # 停止生成标志
         self.current_persona = "default"
         
         # 确保默认人格存在
@@ -266,6 +331,7 @@ class ChatManager:
     def _get_context_messages(self) -> List[Dict]:
         """获取当前对话的上下文消息（用于发送给 API）"""
         if not self.current_chat_id or not self.current_model:
+            logger.warning(f"[上下文] 缺少必要信息: chat_id={self.current_chat_id}, model={self.current_model}")
             return []
         
         messages = []
@@ -282,6 +348,8 @@ class ChatManager:
         # 获取当前模型的历史消息
         db_messages = self.db.get_messages_by_model(self.current_chat_id, self.current_model)
         
+        logger.info(f"[上下文] chat_id={self.current_chat_id}, model={self.current_model}, 历史消息数={len(db_messages)}")
+        
         for msg in db_messages:
             content = msg['content']
             # 角色扮演模式下，过滤掉历史消息中的思考内容
@@ -292,7 +360,9 @@ class ChatManager:
                 "role": msg['role'],
                 "content": content
             })
+            logger.debug(f"[上下文] 添加消息: role={msg['role']}, content={content[:50]}...")
         
+        logger.info(f"[上下文] 最终消息数={len(messages)} (含系统提示词)")
         return messages
     
     def get_all_messages_sorted(self) -> List[Dict]:
@@ -415,7 +485,26 @@ class ChatManager:
                 
                 full_response = ""
                 chunk_count = 0
+                
+                # 重复检测相关变量
+                repeat_detector = RepeatDetector(min_pattern_len=20, max_repeats=3)
+                should_stop = False
+                user_stopped = False
+                
                 for line in response.iter_lines():
+                    # 检查用户停止请求
+                    if self.stop_requested:
+                        logger.info("[用户停止] 用户请求停止生成")
+                        response.close()
+                        user_stopped = True
+                        stream_callback("\n\n⏹ [已停止生成]")
+                        break
+                    
+                    if should_stop:
+                        logger.warning("[重复检测] 检测到重复内容，停止生成")
+                        response.close()
+                        break
+                    
                     if line:
                         try:
                             data = json.loads(line)
@@ -424,13 +513,20 @@ class ChatManager:
                                 full_response += chunk
                                 stream_callback(chunk)
                                 chunk_count += 1
+                                
+                                # 检测重复
+                                if repeat_detector.check(full_response):
+                                    should_stop = True
+                                    # 截断重复部分
+                                    full_response = repeat_detector.truncate(full_response)
+                                    stream_callback("\n\n⚠️ [检测到重复内容，已自动停止]")
                         except Exception as e:
                             logger.error(f"解析响应行失败: {e}, line={line}")
                 
-                logger.info(f"流式响应完成: 收到 {chunk_count} 个块, 总长度 {len(full_response)} 字符")
+                logger.info(f"流式响应完成: 收到 {chunk_count} 个块, 总长度 {len(full_response)} 字符, 用户停止={user_stopped}")
                 
-                # 处理空回复
-                if not full_response.strip():
+                # 处理空回复（非用户主动停止的情况）
+                if not full_response.strip() and not user_stopped:
                     logger.warning("警告: AI 回复为空！")
                     logger.warning(f"模型: {self.current_model}")
                     logger.warning(f"上下文消息数: {len(messages)}")
@@ -687,38 +783,68 @@ class ChatManager:
     
     def generate_suggestions(self, ai_response: str, count: int = 3) -> list:
         """根据 AI 回复生成推荐选项"""
+        import time
+        start_time = time.time()
+        logger.info(f"[推荐生成] 开始生成推荐，count={count}")
+        logger.debug(f"[推荐生成] AI原始回复长度: {len(ai_response)}, 内容前100字: {ai_response[:100]}...")
+        
         if not self.current_model:
+            logger.warning("[推荐生成] 无当前模型，跳过生成")
             return []
         
+        logger.info(f"[推荐生成] 使用模型: {self.current_model}")
+        
         try:
+            # 先过滤掉深度思考内容，只使用实际回复
+            filtered_response = filter_think_content(ai_response)
+            logger.debug(f"[推荐生成] 过滤后回复长度: {len(filtered_response) if filtered_response else 0}")
+            
+            if not filtered_response:
+                logger.warning("[推荐生成] 过滤后回复为空，跳过生成")
+                return []
+            
             # 简化的 prompt，要求更快速的响应
             prompt = f"""根据 AI 的回复，生成 {count} 个简短的用户回复选项。
 要求：每个选项 10-15 字，自然流畅，只返回选项文本（每行一个，不要编号）。
 
-AI 回复：{ai_response[:200]}
+AI 回复：{filtered_response[:200]}
 
 用户回复选项："""
             
+            logger.debug(f"[推荐生成] 请求 prompt:\n{prompt}")
+            
+            request_body = {
+                "model": self.current_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.8,
+                    "num_predict": 80,
+                    "top_k": 40,
+                    "top_p": 0.9
+                }
+            }
+            logger.info(f"[推荐生成] 发送请求到 {self.base_url}/api/generate")
+            logger.debug(f"[推荐生成] 请求参数: model={self.current_model}, temperature=0.8, num_predict=80")
+            
             # 调用 Ollama API，使用更短的超时时间
+            api_start = time.time()
             response = requests.post(
                 f"{self.base_url}/api/generate",
-                json={
-                    "model": self.current_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.8,
-                        "num_predict": 80,  # 减少生成 token 数
-                        "top_k": 40,
-                        "top_p": 0.9
-                    }
-                },
-                timeout=15  # 减少超时时间到 15 秒
+                json=request_body,
+                timeout=15
             )
+            api_elapsed = time.time() - api_start
+            logger.info(f"[推荐生成] API 响应: status={response.status_code}, 耗时={api_elapsed:.2f}s")
             
             if response.status_code == 200:
                 data = response.json()
                 suggestions_text = data.get('response', '').strip()
+                logger.debug(f"[推荐生成] LLM 原始返回:\n{suggestions_text}")
+                
+                # 先过滤掉可能的深度思考内容
+                suggestions_text = filter_think_content(suggestions_text)
+                logger.debug(f"[推荐生成] 过滤思考内容后:\n{suggestions_text}")
                 
                 # 解析返回的选项
                 suggestions = []
@@ -729,16 +855,29 @@ AI 回复：{ai_response[:200]}
                         # 移除开头的数字、点、括号等
                         import re
                         cleaned = re.sub(r'^[\d\.\)\]】\-\*]+\s*', '', line)
-                        if cleaned:
+                        if cleaned and len(cleaned) <= 50:
                             suggestions.append(cleaned)
+                            logger.debug(f"[推荐生成] 解析到选项: {cleaned}")
+                        else:
+                            logger.debug(f"[推荐生成] 跳过选项(过长或为空): {cleaned[:30] if cleaned else '空'}...")
                 
-                return suggestions[:count]
+                result = suggestions[:count]
+                total_elapsed = time.time() - start_time
+                logger.info(f"[推荐生成] 完成，生成 {len(result)} 个推荐，总耗时={total_elapsed:.2f}s")
+                logger.info(f"[推荐生成] 最终结果: {result}")
+                return result
+            else:
+                logger.error(f"[推荐生成] API 返回错误: status={response.status_code}, body={response.text[:200]}")
             
             return []
         
         except requests.exceptions.Timeout:
-            logger.warning("生成推荐选项超时，跳过")
+            elapsed = time.time() - start_time
+            logger.warning(f"[推荐生成] 请求超时(15s)，已耗时={elapsed:.2f}s")
             return []
         except Exception as e:
-            logger.error(f"生成推荐选项失败: {e}")
+            elapsed = time.time() - start_time
+            logger.error(f"[推荐生成] 生成失败: {e}, 已耗时={elapsed:.2f}s")
+            import traceback
+            logger.debug(f"[推荐生成] 异常堆栈:\n{traceback.format_exc()}")
             return []
