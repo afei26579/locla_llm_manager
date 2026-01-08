@@ -13,8 +13,6 @@ class SuggestionButton(QPushButton):
     """场景/推荐选项按钮"""
     clicked_with_text = Signal(str)
     
-    MAX_DISPLAY_WIDTH = 200  # 最大显示宽度
-    
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
         self.full_text = text
@@ -24,30 +22,15 @@ class SuggestionButton(QPushButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(36)
         
-        # 设置 tooltip 显示完整内容
+        # 直接显示完整文字
+        self.setText(text)
         self.setToolTip(text)
-        
-        # 处理过长文字
-        self._update_display_text()
         
         self.clicked.connect(lambda: self.clicked_with_text.emit(self.full_text))
         self.apply_style()
         
         # 连接主题变更
         self.theme.theme_changed.connect(self.apply_style)
-    
-    def _update_display_text(self):
-        """更新显示文字，过长时省略"""
-        fm = QFontMetrics(self.font())
-        # 计算可用宽度（减去 padding）
-        available_width = self.MAX_DISPLAY_WIDTH - 40
-        
-        if fm.horizontalAdvance(self.full_text) > available_width:
-            # 文字过长，截断并添加省略号
-            elided = fm.elidedText(self.full_text, Qt.ElideRight, available_width)
-            self.setText(elided)
-        else:
-            self.setText(self.full_text)
     
     def apply_style(self):
         """应用主题样式"""
@@ -73,6 +56,7 @@ class SuggestionButton(QPushButton):
                 border-radius: 18px;
                 padding: 8px 16px;
                 color: {c['text']};
+                text-align: left;
             }}
             QPushButton:hover {{
                 background: qlineargradient(
@@ -90,16 +74,16 @@ class SuggestionButton(QPushButton):
 
 
 class SuggestionButtonGroup(QWidget):
-    """按钮组容器（均匀分布，自动换行）"""
+    """按钮组容器（每行一个，垂直排列）"""
     button_clicked = Signal(str)
     
     def __init__(self, suggestions: list, parent=None):
         super().__init__(parent)
         self.theme = get_theme_manager()
-        self.suggestions = suggestions
+        self.suggestions = suggestions[:3]  # 最多显示3个
         self.buttons = []
         
-        # 主布局
+        # 主布局（垂直）
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(20, 10, 20, 10)
         self.main_layout.setSpacing(8)
@@ -111,7 +95,7 @@ class SuggestionButtonGroup(QWidget):
         self.theme.theme_changed.connect(self.apply_style)
     
     def _create_buttons(self):
-        """创建按钮"""
+        """创建按钮，每行一个"""
         # 清除旧布局
         while self.main_layout.count():
             item = self.main_layout.takeAt(0)
@@ -120,21 +104,11 @@ class SuggestionButtonGroup(QWidget):
         
         self.buttons = []
         
-        # 创建一行容器
-        row = QWidget()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
-        
         for text in self.suggestions:
             btn = SuggestionButton(text, self)
             btn.clicked_with_text.connect(self.button_clicked.emit)
             self.buttons.append(btn)
-            row_layout.addWidget(btn)
-        
-        # 两端对齐，按钮之间均匀分布
-        row_layout.addStretch()
-        self.main_layout.addWidget(row)
+            self.main_layout.addWidget(btn)
     
     def apply_style(self):
         """应用主题样式"""

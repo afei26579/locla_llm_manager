@@ -182,7 +182,15 @@ class ChatPage(QWidget):
         
         # 如果欢迎界面已存在且有旋转木马，更新它
         if hasattr(self, 'carousel') and self.carousel:
-            self.carousel.set_personas(personas)
+            # 根据当前欢迎界面类型过滤
+            welcome_type = getattr(self, '_welcome_type', 'assistant')
+            if welcome_type == 'roleplay':
+                # 只显示角色
+                filtered = {k: v for k, v in personas.items() if v.get('type', 'assistant') == 'roleplay'}
+            else:
+                # 只显示助手
+                filtered = {k: v for k, v in personas.items() if v.get('type', 'assistant') == 'assistant'}
+            self.carousel.set_personas(filtered)
         # 如果欢迎界面存在但没有旋转木马，重新创建
         elif hasattr(self, 'welcome_widget') and self.welcome_widget:
             self.clear_welcome()
@@ -573,6 +581,7 @@ class ChatPage(QWidget):
         """显示欢迎界面（3D旋转木马 - 仅助手）"""
         from .carousel_widget import CarouselWidget
         
+        self._welcome_type = 'assistant'  # 标记当前欢迎界面类型
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -799,6 +808,7 @@ class ChatPage(QWidget):
         if not assistants:
             return
         
+        self._welcome_type = 'assistant'  # 标记当前欢迎界面类型
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -885,6 +895,7 @@ class ChatPage(QWidget):
         if not roles:
             return
         
+        self._welcome_type = 'roleplay'  # 标记当前欢迎界面类型
         self.welcome_widget = QWidget()
         layout = QVBoxLayout(self.welcome_widget)
         layout.setContentsMargins(0, 0, 0, 0)

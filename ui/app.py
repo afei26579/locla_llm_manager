@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
         """快捷启动 Ollama"""
         self.ollama_quick_btn.setEnabled(False)
         self.ollama_quick_btn.setText("启动中...")
-        self.set_notification("正在启动 Ollama 服务...", "")
+        self.set_notification("正在启动模型引擎...", "")
         
         def do_start():
             return self.ollama.start_service()
@@ -693,14 +693,14 @@ class MainWindow(QMainWindow):
                 pass
             self.current_history_item = None
         
-        # 如果是角色扮演，自动发送问候语
+        # 如果是角色扮演，随机选择一个场景并发送开场白
         if persona.get('type') == 'roleplay':
-            greeting_config = self.chat_manager.get_role_greeting(persona_key)
-            greeting = greeting_config.get('greeting', '')
-            scenarios = greeting_config.get('scenarios', [])
+            scene = self.chat_manager.get_random_scene(persona_key)
+            scene_text = scene.get('scene', '')
+            suggestions = scene.get('suggestions', [])
             
-            if greeting:
-                # 将问候语保存到数据库（作为 assistant 消息）
+            if scene_text:
+                # 将开场白保存到数据库（作为 assistant 消息）
                 timestamp = datetime.now().isoformat()
                 
                 # 获取当前模型
@@ -715,27 +715,27 @@ class MainWindow(QMainWindow):
                     conv_id=chat_id,
                     model=current_model,
                     role='assistant',
-                    content=greeting,
+                    content=scene_text,
                     timestamp=timestamp
                 )
                 
-                # 添加 AI 问候消息到 UI
+                # 添加 AI 开场消息到 UI
                 self.chat_page.add_ai_message(
-                    greeting,
+                    scene_text,
                     timestamp=timestamp
                 )
                 
-                # 添加场景选项按钮
-                if scenarios:
-                    self.chat_page.add_suggestion_buttons(scenarios)
+                # 添加推荐回复按钮
+                if suggestions:
+                    self.chat_page.add_suggestion_buttons(suggestions)
 
-    @Slot(str, str, str, str, str, str, str, list, str, list, bool)
+    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str)
     def add_persona(self, key: str, name: str, persona_type: str, icon: str, desc: str, prompt: str, 
-                   icon_path: str = "", backgrounds: list = None, greeting: str = "", 
-                   scenarios: list = None, enable_suggestions: bool = True):
+                   icon_path: str = "", backgrounds: list = None, scene_designs: list = None,
+                   enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
         """添加助手/角色"""
         self.chat_manager.add_persona(key, name, icon, desc, prompt, icon_path, persona_type, 
-                                     backgrounds, greeting, scenarios, enable_suggestions)
+                                     backgrounds, scene_designs, enable_suggestions, gender, user_identity)
         self.refresh_personas()
         type_name = "角色" if persona_type == "roleplay" else "助手"
         self.set_notification(f"✅ 已添加{type_name}: {name}", "success")
@@ -839,13 +839,13 @@ class MainWindow(QMainWindow):
                 self.refresh_personas()
                 self.set_notification("✅ 已删除", "success")
     
-    @Slot(str, str, str, str, str, str, str, list, str, list, bool)
+    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str)
     def edit_persona(self, key: str, name: str, persona_type: str, icon: str, desc: str, prompt: str, 
-                    icon_path: str, backgrounds: list = None, greeting: str = "", 
-                    scenarios: list = None, enable_suggestions: bool = True):
+                    icon_path: str, backgrounds: list = None, scene_designs: list = None,
+                    enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
         """编辑助手/角色"""
         self.chat_manager.update_persona(key, name, icon, desc, prompt, icon_path, persona_type, 
-                                        backgrounds, greeting, scenarios, enable_suggestions)
+                                        backgrounds, scene_designs, enable_suggestions, gender, user_identity)
         self.refresh_personas()
         type_name = "角色" if persona_type == "roleplay" else "助手"
         self.set_notification(f"✅ 已更新{type_name}: {name}", "success")
@@ -1361,24 +1361,21 @@ class MainWindow(QMainWindow):
         
         # 获取角色配置
         persona = self.chat_manager.get_current_persona()
-        greeting_config = self.chat_manager.get_role_greeting(persona.get('key', ''))
-        greeting = greeting_config.get('greeting', '')
-        scenarios = greeting_config.get('scenarios', [])
+        scene_config = self.chat_manager.get_role_scene_config(persona.get('key', ''))
+        scene_designs = scene_config.get('scene_designs', [])
         
-        # 判断是否是问候语回复（对话中只有一条 AI 消息）
+        # 判断是否是开场白回复（对话中只有一条 AI 消息且有场景设计）
         ai_msg_count = sum(1 for msg in messages if msg.get('role') == 'assistant')
-        is_greeting_reply = ai_msg_count == 1 and greeting
+        has_scene = bool(scene_designs)
+        is_opening_reply = ai_msg_count == 1 and has_scene
         
-        logger.info(f"generate_suggestions: ai_msg_count={ai_msg_count}, greeting={bool(greeting)}, scenarios={len(scenarios)}, is_greeting_reply={is_greeting_reply}")
+        logger.info(f"generate_suggestions: ai_msg_count={ai_msg_count}, has_scene={has_scene}, is_opening_reply={is_opening_reply}")
         
-        if is_greeting_reply:
-            # 问候语回复：使用预设场景（如果有）
-            if scenarios:
-                self.chat_page.add_suggestion_buttons(scenarios)
-            # 没有预设场景则不显示推荐
+        if is_opening_reply:
+            # 开场白回复：推荐选项已在新建对话时添加，无需再次添加
             return
         
-        # 非问候语回复：使用 LLM 生成推荐
+        # 非开场白回复：使用 LLM 生成推荐
         logger.info("generate_suggestions: 开始 LLM 生成推荐")
         
         # 如果已有推荐生成线程在运行，先停止
@@ -1413,7 +1410,7 @@ class MainWindow(QMainWindow):
     
     def start_ollama(self):
         """启动 Ollama"""
-        self.set_notification("正在启动 Ollama 服务...", "")
+        self.set_notification("正在启动模型引擎...", "")
         
         def start():
             return self.ollama.start_service()
@@ -1446,7 +1443,7 @@ class MainWindow(QMainWindow):
             if success:
                 self.update_ollama_quick_status(True, True)
                 self.settings_page.update_ollama_status(True, True)
-                self.set_notification("Ollama 服务已启动", "success")
+                self.set_notification("模型引擎已启动", "success")
                 
                 # 刷新模型列表
                 models = self.ollama.list_models()
@@ -1474,7 +1471,7 @@ class MainWindow(QMainWindow):
     def download_model(self, model_name: str, quantization: str = ''):
         """下载模型"""
         if not self.ollama.is_running():
-            QMessageBox.warning(self, "提示", "请先启动 Ollama 服务")
+            QMessageBox.warning(self, "提示", "请先启动模型引擎")
             self.settings_page.finish_download(model_name, False)
             return
         

@@ -197,25 +197,38 @@ class Database:
             cursor.execute("PRAGMA table_info(personas)")
             columns = [col[1] for col in cursor.fetchall()]
             
-            # 添加 greeting 字段（问候语）
-            if 'greeting' not in columns:
-                logger.info("开始迁移：添加 personas.greeting 字段")
+            # 添加 scene_designs 字段（场景设计，JSON 数组）
+            if 'scene_designs' not in columns:
+                logger.info("开始迁移：添加 personas.scene_designs 字段")
                 cursor.execute('''
                     ALTER TABLE personas 
-                    ADD COLUMN greeting TEXT DEFAULT ''
+                    ADD COLUMN scene_designs TEXT DEFAULT '[]'
                 ''')
                 conn.commit()
-                logger.info("✅ 已添加 personas.greeting 字段")
-            
-            # 添加 scenarios 字段（场景选项，JSON 数组）
-            if 'scenarios' not in columns:
-                logger.info("开始迁移：添加 personas.scenarios 字段")
-                cursor.execute('''
-                    ALTER TABLE personas 
-                    ADD COLUMN scenarios TEXT DEFAULT '[]'
-                ''')
-                conn.commit()
-                logger.info("✅ 已添加 personas.scenarios 字段")
+                logger.info("✅ 已添加 personas.scene_designs 字段")
+                
+                # 迁移旧数据：将 greeting 和 scenarios 合并为 scene_designs
+                if 'greeting' in columns or 'scenarios' in columns:
+                    logger.info("开始迁移旧数据到 scene_designs")
+                    cursor.execute("SELECT key, greeting, scenarios FROM personas")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        key = row[0]
+                        greeting = row[1] or ''
+                        scenarios_str = row[2] or '[]'
+                        try:
+                            scenarios = json.loads(scenarios_str) if scenarios_str else []
+                        except:
+                            scenarios = []
+                        
+                        if greeting or scenarios:
+                            scene_designs = [{'scene': greeting, 'suggestions': scenarios[:3]}]
+                            cursor.execute(
+                                "UPDATE personas SET scene_designs = ? WHERE key = ?",
+                                (json.dumps(scene_designs), key)
+                            )
+                    conn.commit()
+                    logger.info("✅ 已迁移旧数据到 scene_designs")
             
             # 添加 enable_suggestions 字段（是否启用推荐回复）
             if 'enable_suggestions' not in columns:
@@ -226,6 +239,26 @@ class Database:
                 ''')
                 conn.commit()
                 logger.info("✅ 已添加 personas.enable_suggestions 字段")
+            
+            # 添加 gender 字段（性别）
+            if 'gender' not in columns:
+                logger.info("开始迁移：添加 personas.gender 字段")
+                cursor.execute('''
+                    ALTER TABLE personas 
+                    ADD COLUMN gender TEXT DEFAULT ''
+                ''')
+                conn.commit()
+                logger.info("✅ 已添加 personas.gender 字段")
+            
+            # 添加 user_identity 字段（用户身份设计）
+            if 'user_identity' not in columns:
+                logger.info("开始迁移：添加 personas.user_identity 字段")
+                cursor.execute('''
+                    ALTER TABLE personas 
+                    ADD COLUMN user_identity TEXT DEFAULT ''
+                ''')
+                conn.commit()
+                logger.info("✅ 已添加 personas.user_identity 字段")
                 
         except Exception as e:
             logger.error(f"迁移角色对话字段失败: {e}")
@@ -531,22 +564,23 @@ class Database:
     def add_persona(self, key: str, name: str, icon: str = '🤖', 
                    icon_path: str = '', description: str = '', system_prompt: str = '',
                    persona_type: str = 'assistant', background_images: str = '',
-                   greeting: str = '', scenarios: list = None, enable_suggestions: bool = True) -> bool:
+                   scene_designs: list = None, enable_suggestions: bool = True,
+                   gender: str = '', user_identity: str = '') -> bool:
         """添加人格"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # 将 scenarios 列表转换为 JSON 字符串
-            scenarios_str = json.dumps(scenarios if scenarios else [])
+            # 将 scene_designs 列表转换为 JSON 字符串
+            scene_designs_str = json.dumps(scene_designs if scene_designs else [])
             
             cursor.execute('''
                 INSERT OR REPLACE INTO personas 
                 (key, name, icon, icon_path, description, system_prompt, type, background_images, 
-                 greeting, scenarios, enable_suggestions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 scene_designs, enable_suggestions, gender, user_identity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (key, name, icon, icon_path, description, system_prompt, persona_type, background_images,
-                  greeting, scenarios_str, 1 if enable_suggestions else 0))
+                  scene_designs_str, 1 if enable_suggestions else 0, gender, user_identity))
             
             conn.commit()
             return True
@@ -565,14 +599,14 @@ class Database:
             
             if row:
                 persona = dict(row)
-                # 解析 scenarios JSON 字符串
-                if 'scenarios' in persona and persona['scenarios']:
+                # 解析 scene_designs JSON 字符串
+                if 'scene_designs' in persona and persona['scene_designs']:
                     try:
-                        persona['scenarios'] = json.loads(persona['scenarios'])
+                        persona['scene_designs'] = json.loads(persona['scene_designs'])
                     except:
-                        persona['scenarios'] = []
+                        persona['scene_designs'] = []
                 else:
-                    persona['scenarios'] = []
+                    persona['scene_designs'] = []
                 
                 # 转换 enable_suggestions 为布尔值
                 if 'enable_suggestions' in persona:
@@ -598,14 +632,14 @@ class Database:
                 row_dict = dict(row)
                 key = row_dict.pop('key')
                 
-                # 解析 scenarios JSON 字符串
-                if 'scenarios' in row_dict and row_dict['scenarios']:
+                # 解析 scene_designs JSON 字符串
+                if 'scene_designs' in row_dict and row_dict['scene_designs']:
                     try:
-                        row_dict['scenarios'] = json.loads(row_dict['scenarios'])
+                        row_dict['scene_designs'] = json.loads(row_dict['scene_designs'])
                     except:
-                        row_dict['scenarios'] = []
+                        row_dict['scene_designs'] = []
                 else:
-                    row_dict['scenarios'] = []
+                    row_dict['scene_designs'] = []
                 
                 # 转换 enable_suggestions 为布尔值
                 if 'enable_suggestions' in row_dict:

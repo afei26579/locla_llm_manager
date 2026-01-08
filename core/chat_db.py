@@ -264,21 +264,21 @@ class ChatManager:
     
     def add_persona(self, key: str, name: str, icon: str, description: str, 
                    system_prompt: str, icon_path: str = "", persona_type: str = "assistant",
-                   background_images: list = None, greeting: str = "", scenarios: list = None,
-                   enable_suggestions: bool = True):
+                   background_images: list = None, scene_designs: list = None,
+                   enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
         """添加人格"""
         bg_str = json.dumps(background_images) if background_images else ''
         self.db.add_persona(key, name, icon, icon_path, description, system_prompt, persona_type, bg_str,
-                           greeting, scenarios, enable_suggestions)
+                           scene_designs, enable_suggestions, gender, user_identity)
     
     def update_persona(self, key: str, name: str, icon: str, description: str, 
                       system_prompt: str, icon_path: str = "", persona_type: str = "assistant",
-                      background_images: list = None, greeting: str = "", scenarios: list = None,
-                      enable_suggestions: bool = True):
+                      background_images: list = None, scene_designs: list = None,
+                      enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
         """更新人格"""
         bg_str = json.dumps(background_images) if background_images else ''
         self.db.add_persona(key, name, icon, icon_path, description, system_prompt, persona_type, bg_str,
-                           greeting, scenarios, enable_suggestions)
+                           scene_designs, enable_suggestions, gender, user_identity)
     
     def delete_persona(self, key: str) -> bool:
         """删除人格（debug 模式下允许删除默认助手）"""
@@ -339,8 +339,15 @@ class ChatManager:
         # 添加系统提示词
         persona = self.get_current_persona()
         system_prompt = persona.get('system_prompt', '')
+        user_identity = persona.get('user_identity', '')
+        
+        # 如果有用户身份设计，将其加入系统提示词
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            if user_identity:
+                full_prompt = f"{system_prompt}\n\n【用户身份】\n{user_identity}"
+            else:
+                full_prompt = system_prompt
+            messages.append({"role": "system", "content": full_prompt})
         
         # 检查是否是角色扮演类型
         is_roleplay = persona.get('type', 'assistant') == 'roleplay'
@@ -461,7 +468,7 @@ class ChatManager:
                         timeout=300
                     )
                 except requests.exceptions.ConnectionError:
-                    error_msg = "⚠️ 无法连接到 Ollama 服务，请检查服务是否已启动"
+                    error_msg = "⚠️ 无法连接到模型引擎，请检查服务是否已启动"
                     logger.error(f"连接错误: 无法连接到 Ollama")
                     stream_callback(error_msg)
                     self._save_error_response(error_msg, timestamp)
@@ -560,7 +567,7 @@ class ChatManager:
                         timeout=300
                     )
                 except requests.exceptions.ConnectionError:
-                    error_msg = "⚠️ 无法连接到 Ollama 服务，请检查服务是否已启动"
+                    error_msg = "⚠️ 无法连接到模型引擎，请检查服务是否已启动"
                     self._save_error_response(error_msg, timestamp)
                     return error_msg
                 except requests.exceptions.Timeout:
@@ -629,7 +636,7 @@ class ChatManager:
             elif 'terminated' in error_text.lower():
                 return "⚠️ 模型运行异常终止\n可能是内存不足或模型文件损坏，请尝试重新下载"
             else:
-                return f"⚠️ 模型运行错误\n请尝试重启 Ollama 服务或重新下载模型"
+                return f"⚠️ 模型运行错误\n请尝试重启模型引擎或重新下载模型"
         
         elif status_code == 404:
             return f"⚠️ 模型 {self.current_model} 不存在\n请在设置中下载此模型"
@@ -638,18 +645,18 @@ class ChatManager:
             return "⚠️ 请求参数错误\n请检查输入内容是否正常"
         
         elif status_code == 503:
-            return "⚠️ Ollama 服务暂时不可用\n请稍后重试或重启服务"
+            return "⚠️ 模型引擎暂时不可用\n请稍后重试或重启服务"
         
         elif status_code == 408:
             return "⚠️ 请求超时\n模型响应时间过长，请重试"
         
         else:
-            return f"⚠️ 服务器错误 (错误码: {status_code})\n请检查 Ollama 服务状态"
+            return f"⚠️ 服务器错误 (错误码: {status_code})\n请检查模型引擎状态"
     
     def _translate_error(self, error: str) -> str:
         """将常见英文错误翻译为中文"""
         translations = {
-            'Connection refused': '连接被拒绝，Ollama 服务可能未启动',
+            'Connection refused': '连接被拒绝，模型引擎可能未启动',
             'Connection reset': '连接被重置，请检查网络',
             'timed out': '连接超时',
             'No such file': '文件不存在',
@@ -765,21 +772,66 @@ class ChatManager:
         """搜索消息内容"""
         return self.db.search_messages(keyword)
     
-    def get_role_greeting(self, persona_key: str) -> dict:
-        """获取角色问候配置"""
+    def get_role_scene_config(self, persona_key: str) -> dict:
+        """获取角色场景配置"""
         persona = self.db.get_persona(persona_key)
         if not persona:
             return {
-                'greeting': '',
-                'scenarios': [],
+                'scene_designs': [],
                 'enable_suggestions': False
             }
         
         return {
-            'greeting': persona.get('greeting', ''),
-            'scenarios': persona.get('scenarios', []),
+            'scene_designs': persona.get('scene_designs', []),
             'enable_suggestions': persona.get('enable_suggestions', True)
         }
+    
+    def get_random_scene(self, persona_key: str) -> dict:
+        """根据当前时间段获取对应场景设计"""
+        import random
+        from datetime import datetime
+        
+        config = self.get_role_scene_config(persona_key)
+        scene_designs = config.get('scene_designs', [])
+        
+        if not scene_designs:
+            return {'scene': '', 'suggestions': []}
+        
+        # 获取当前小时
+        current_hour = datetime.now().hour
+        
+        # 根据时间确定当前时间段
+        def get_current_period():
+            if 0 <= current_hour < 4:
+                return 'midnight'  # 凌晨
+            elif 4 <= current_hour < 6:
+                return 'dawn'  # 拂晓
+            elif 6 <= current_hour < 10:
+                return 'morning'  # 晨间
+            elif 10 <= current_hour < 12:
+                return 'forenoon'  # 上午
+            elif 12 <= current_hour < 14:
+                return 'noon'  # 中午
+            elif 14 <= current_hour < 17:
+                return 'afternoon'  # 午后
+            elif 17 <= current_hour < 19:
+                return 'dusk'  # 傍晚
+            else:
+                return 'night'  # 夜晚
+        
+        current_period = get_current_period()
+        
+        # 筛选匹配当前时间段的场景（包括 any）
+        matching_scenes = [
+            s for s in scene_designs 
+            if s.get('time_period', 'any') in ('any', current_period)
+        ]
+        
+        # 如果没有匹配的场景，使用所有场景
+        if not matching_scenes:
+            matching_scenes = scene_designs
+        
+        return random.choice(matching_scenes)
     
     def generate_suggestions(self, ai_response: str, count: int = 3) -> list:
         """根据 AI 回复生成推荐选项"""

@@ -5,13 +5,151 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QStackedWidget, QButtonGroup,
     QTabWidget, QSizePolicy, QDialog
 )
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import Qt, Signal, Slot, QMimeData, QPoint
+from PySide6.QtGui import QFont, QPixmap, QDrag, QPainter
 
 from .themes import get_theme_manager, THEMES
 from .components import StatusIndicator, ModelCard
 
 logger = logging.getLogger(__name__)
+
+
+class DraggableBackgroundCard(QFrame):
+    """可拖拽的背景图片卡片"""
+    
+    deleted = Signal(int)  # 删除信号，传递索引
+    order_changed = Signal(int, int)  # 顺序变化信号，传递 from_index, to_index
+    
+    def __init__(self, index: int, image_path: str, theme_colors: dict, parent=None):
+        super().__init__(parent)
+        self.index = index
+        self.image_path = image_path
+        self.theme_colors = theme_colors
+        self._drag_start_pos = None
+        
+        self.setFixedSize(80, 80)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.OpenHandCursor)
+        self._setup_ui()
+        self._apply_style(False)
+    
+    def _setup_ui(self):
+        c = self.theme_colors
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+        
+        # 图片预览
+        self.preview = QLabel()
+        self.preview.setFixedSize(72, 56)
+        self.preview.setAlignment(Qt.AlignCenter)
+        
+        if os.path.exists(self.image_path):
+            pixmap = QPixmap(self.image_path)
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(72, 56, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                self.preview.setPixmap(pixmap)
+            else:
+                self.preview.setText("❌")
+                self.preview.setStyleSheet(f"color: {c['error']};")
+        else:
+            self.preview.setText("❌")
+            self.preview.setStyleSheet(f"color: {c['error']};")
+        layout.addWidget(self.preview)
+        
+        # 删除按钮
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(72, 18)
+        del_btn.setCursor(Qt.PointingHandCursor)
+        del_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c['error']}80;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {c['error']};
+            }}
+        """)
+        del_btn.clicked.connect(lambda: self.deleted.emit(self.index))
+        layout.addWidget(del_btn)
+    
+    def _apply_style(self, is_drag_over: bool):
+        c = self.theme_colors
+        if is_drag_over:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    border: 2px dashed {c['accent']};
+                    border-radius: 8px;
+                    background-color: {c['accent']}20;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    border: 2px solid {c['border']};
+                    border-radius: 8px;
+                    background-color: {c['bg']};
+                }}
+            """)
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        self.setCursor(Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton):
+            return
+        if not self._drag_start_pos:
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < 10:
+            return
+        
+        # 开始拖拽
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setText(str(self.index))
+        drag.setMimeData(mime_data)
+        
+        # 创建拖拽预览图
+        pixmap = self.grab()
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        painter.fillRect(pixmap.rect(), Qt.transparent)
+        painter.end()
+        drag.setPixmap(pixmap.scaled(70, 70, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        drag.setHotSpot(QPoint(35, 35))
+        
+        self.setCursor(Qt.ClosedHandCursor)
+        drag.exec(Qt.MoveAction)
+        self.setCursor(Qt.OpenHandCursor)
+    
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            from_index = int(event.mimeData().text())
+            if from_index != self.index:
+                event.acceptProposedAction()
+                self._apply_style(True)
+    
+    def dragLeaveEvent(self, event):
+        self._apply_style(False)
+    
+    def dropEvent(self, event):
+        self._apply_style(False)
+        if event.mimeData().hasText():
+            from_index = int(event.mimeData().text())
+            if from_index != self.index:
+                self.order_changed.emit(from_index, self.index)
+                event.acceptProposedAction()
 
 
 class ModelCategoryTab(QWidget):
@@ -221,8 +359,8 @@ class SettingsPage(QWidget):
     uninstall_model = Signal(str)
     theme_changed = Signal(str)
     personal_changed = Signal(str, str, str, list, int)  # user_name, avatar_path, avatar_color, backgrounds, interval
-    persona_added = Signal(str, str, str, str, str, str, str, list, str, list, bool)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, greeting, scenarios, enable_suggestions
-    persona_edited = Signal(str, str, str, str, str, str, str, list, str, list, bool)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, greeting, scenarios, enable_suggestions
+    persona_added = Signal(str, str, str, str, str, str, str, list, list, bool, str, str)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity
+    persona_edited = Signal(str, str, str, str, str, str, str, list, list, bool, str, str)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity
     persona_deleted = Signal(str)
     
     def __init__(self, parent=None):
@@ -718,7 +856,6 @@ class SettingsPage(QWidget):
 
     def _update_bg_preview(self):
         """更新背景图片预览"""
-        from PySide6.QtGui import QPixmap
         from core.media_manager import get_media_manager
         
         # 清空现有预览
@@ -730,56 +867,28 @@ class SettingsPage(QWidget):
         c = self.theme.colors
         media_manager = get_media_manager()
         
-        for i, relative_path in enumerate(self.chat_backgrounds[:5]):  # 最多显示5张
-            # 获取绝对路径
-            absolute_path = media_manager.get_absolute_path(relative_path)
-            
-            frame = QFrame()
-            frame.setFixedSize(80, 80)
-            frame.setStyleSheet(f"""
-                QFrame {{
-                    border: 2px solid {c['border']};
-                    border-radius: 8px;
-                }}
-            """)
-            
-            frame_layout = QVBoxLayout(frame)
-            frame_layout.setContentsMargins(2, 2, 2, 2)
-            
-            preview = QLabel()
-            preview.setFixedSize(72, 56)
-            if os.path.exists(absolute_path):
-                pixmap = QPixmap(absolute_path)
-                pixmap = pixmap.scaled(72, 56, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                preview.setPixmap(pixmap)
-            else:
-                preview.setText("❌")
-                preview.setStyleSheet(f"color: {c['error']};")
-            preview.setAlignment(Qt.AlignCenter)
-            frame_layout.addWidget(preview)
-            
-            del_btn = QPushButton("✕")
-            del_btn.setFixedSize(72, 18)
-            del_btn.setCursor(Qt.PointingHandCursor)
-            del_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {c['error']}80;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 10px;
-                }}
-            """)
-            del_btn.clicked.connect(lambda checked, idx=i: self._remove_bg(idx))
-            frame_layout.addWidget(del_btn)
-            
-            self.bg_preview_layout.addWidget(frame)
-        
-        if len(self.chat_backgrounds) > 5:
-            more_label = QLabel(f"+{len(self.chat_backgrounds) - 5}")
-            more_label.setFont(QFont("Microsoft YaHei UI", 12))
-            more_label.setStyleSheet(f"color: {c['text_secondary']};")
-            self.bg_preview_layout.addWidget(more_label)
+        if not self.chat_backgrounds:
+            empty_label = QLabel("未添加背景图片")
+            empty_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 12px;")
+            empty_label.setAlignment(Qt.AlignCenter)
+            self.bg_preview_layout.addWidget(empty_label)
+        else:
+            for i, relative_path in enumerate(self.chat_backgrounds):
+                absolute_path = media_manager.get_absolute_path(relative_path)
+                
+                card = DraggableBackgroundCard(i, absolute_path, c, self)
+                card.deleted.connect(self._remove_bg)
+                card.order_changed.connect(self._reorder_bg)
+                self.bg_preview_layout.addWidget(card)
+    
+    def _reorder_bg(self, from_index: int, to_index: int):
+        """重新排序背景图片"""
+        if 0 <= from_index < len(self.chat_backgrounds) and 0 <= to_index < len(self.chat_backgrounds):
+            item = self.chat_backgrounds.pop(from_index)
+            self.chat_backgrounds.insert(to_index, item)
+            self._update_bg_preview()
+            self._save_personal_settings()
+            self._emit_personal_changed()
 
     def _remove_bg(self, index: int):
         """删除指定背景图片"""
@@ -794,6 +903,22 @@ class SettingsPage(QWidget):
         self.background_interval = value
         self._save_personal_settings()
         self._emit_personal_changed()
+        # 同步更新对话框中的轮播间隔（如果存在）
+        if hasattr(self, '_dialog_interval_spin') and self._dialog_interval_spin:
+            self._dialog_interval_spin.blockSignals(True)
+            self._dialog_interval_spin.setValue(value)
+            self._dialog_interval_spin.blockSignals(False)
+
+    def _on_dialog_interval_changed(self, value: int):
+        """对话框中背景轮播间隔变化，同步到个性化设置"""
+        self.background_interval = value
+        self._save_personal_settings()
+        self._emit_personal_changed()
+        # 同步更新个性化设置中的轮播间隔
+        if hasattr(self, 'bg_interval_spin') and self.bg_interval_spin:
+            self.bg_interval_spin.blockSignals(True)
+            self.bg_interval_spin.setValue(value)
+            self.bg_interval_spin.blockSignals(False)
 
     def create_personas_page(self):
         """创建助手管理页面"""
@@ -1111,17 +1236,19 @@ class SettingsPage(QWidget):
         
         # 图标（支持自定义图片）
         icon_label = QLabel()
-        icon_label.setFixedSize(50, 50)
+        icon_label.setObjectName("personaIcon")
+        icon_label.setFixedSize(70, 70)
         icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet("border: none; background: transparent;")
         
         icon_path = persona.get("icon_path")
         if icon_path and os.path.exists(icon_path):
             from PySide6.QtGui import QPixmap
-            pixmap = QPixmap(icon_path).scaled(46, 46, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap = QPixmap(icon_path).scaled(70, 70, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             icon_label.setPixmap(pixmap)
         else:
             icon_label.setText(persona.get("icon", "🤖"))
-            icon_label.setFont(QFont("Segoe UI Emoji", 28))
+            icon_label.setFont(QFont("Segoe UI Emoji", 36))
         
         layout.addWidget(icon_label)
         
@@ -1154,6 +1281,27 @@ class SettingsPage(QWidget):
             }}
         """)
         name_row.addWidget(type_label)
+        
+        # 性别标签（仅角色扮演类型且有性别时显示）
+        gender = persona.get("gender", "")
+        if persona_type == 'roleplay' and gender:
+            gender_icon = {"男": "♂", "女": "♀", "其他": "⚧"}.get(gender, "")
+            gender_color = {"男": "#4A90D9", "女": "#E91E8C", "其他": "#9C27B0"}.get(gender, c['text_secondary'])
+            gender_label = QLabel(f"{gender_icon} {gender}")
+            gender_label.setObjectName("personaGender")
+            gender_label.setFont(QFont("Microsoft YaHei UI", 10))
+            gender_label.setFixedHeight(20)
+            gender_label.setAlignment(Qt.AlignCenter)
+            gender_label.setStyleSheet(f"""
+                QLabel {{
+                    color: {gender_color};
+                    background-color: {gender_color}15;
+                    border-radius: 10px;
+                    padding: 0 8px;
+                }}
+            """)
+            name_row.addWidget(gender_label)
+        
         name_row.addStretch()
         
         info_layout.addLayout(name_row)
@@ -1162,7 +1310,7 @@ class SettingsPage(QWidget):
         desc_label.setObjectName("personaDesc")
         desc_label.setFont(QFont("Microsoft YaHei UI", 11))
         desc_label.setStyleSheet(f"color: {c['text_secondary']}; background: transparent;")
-        desc_label.setWordWrap(True)
+        desc_label.setWordWrap(False)
         info_layout.addWidget(desc_label)
         
         layout.addLayout(info_layout, 1)
@@ -1254,7 +1402,16 @@ class SettingsPage(QWidget):
         dialog_title += "角色扮演" if persona_type == 'roleplay' else "协作助手"
         dialog.setWindowTitle(dialog_title)
         dialog.setFixedWidth(560)
-        dialog.setMaximumHeight(700)  # 设置最大高度
+        
+        # 获取主窗口高度，设置对话框高度为主窗口高度的 80%
+        main_window = self.window()
+        if main_window:
+            window_height = main_window.height()
+            dialog_height = int(window_height * 0.80)
+            dialog.setFixedHeight(dialog_height)
+        else:
+            dialog.setFixedHeight(700)
+        
         dialog.setStyleSheet(f"""
             QDialog {{
                 background-color: {c['bg']};
@@ -1390,6 +1547,52 @@ class SettingsPage(QWidget):
             desc_input.setText(edit_data.get('description', ''))
         form_layout.addRow("描述:", desc_input)
         
+        # 性别选择（仅角色扮演类型显示）
+        self._gender_combo = None
+        if persona_type == 'roleplay':
+            gender_combo = QComboBox()
+            gender_combo.addItems(["未设置", "男", "女", "其他"])
+            gender_combo.setFixedHeight(36)
+            gender_combo.setStyleSheet(f"""
+                QComboBox {{
+                    background-color: {c['input_bg']};
+                    border: 2px solid {c['border']};
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    color: {c['text']};
+                    font-size: 13px;
+                }}
+                QComboBox:focus {{
+                    border-color: {c['accent']};
+                }}
+                QComboBox:hover {{
+                    border-color: {c['text_dim']};
+                }}
+                QComboBox::drop-down {{
+                    border: none;
+                    width: 30px;
+                }}
+                QComboBox::down-arrow {{
+                    image: none;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 5px solid {c['text']};
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: {c['input_bg']};
+                    color: {c['text']};
+                    selection-background-color: {c['accent']};
+                    border: 1px solid {c['border']};
+                    border-radius: 4px;
+                }}
+            """)
+            if is_edit and edit_data:
+                gender = edit_data.get('gender', '')
+                gender_map = {'': 0, '男': 1, '女': 2, '其他': 3}
+                gender_combo.setCurrentIndex(gender_map.get(gender, 0))
+            form_layout.addRow("性别:", gender_combo)
+            self._gender_combo = gender_combo
+        
         layout.addLayout(form_layout)
         
         # 图标选择区域
@@ -1485,75 +1688,173 @@ class SettingsPage(QWidget):
             prompt_input.setText(edit_data.get('system_prompt', ''))
         layout.addWidget(prompt_input)
         
+        # 用户身份设计（仅角色扮演类型显示）
+        self._user_identity_input = None
+        if persona_type == 'roleplay':
+            user_identity_label = QLabel("用户身份设计:")
+            user_identity_label.setStyleSheet(f"color: {c['text']};")
+            user_identity_label.setFont(QFont("Microsoft YaHei UI", 11))
+            layout.addWidget(user_identity_label)
+            
+            user_identity_hint = QLabel("描述用户与角色的关系，将自动加入系统提示词")
+            user_identity_hint.setStyleSheet(f"color: {c['text_dim']}; font-size: 11px;")
+            layout.addWidget(user_identity_hint)
+            
+            self._user_identity_input = QTextEdit()
+            self._user_identity_input.setPlaceholderText("例如：用户是角色的主人，角色对用户非常依赖和信任...")
+            self._user_identity_input.setMinimumHeight(60)
+            self._user_identity_input.setMaximumHeight(80)
+            self._user_identity_input.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: {c['input_bg']};
+                    border: 2px solid {c['border']};
+                    border-radius: 8px;
+                    padding: 10px;
+                    color: {c['text']};
+                    font-size: 13px;
+                    line-height: 1.5;
+                }}
+                QTextEdit:focus {{
+                    border-color: {c['accent']};
+                }}
+                QTextEdit:hover {{
+                    border-color: {c['text_dim']};
+                }}
+            """)
+            if is_edit and edit_data:
+                self._user_identity_input.setText(edit_data.get('user_identity', ''))
+            layout.addWidget(self._user_identity_input)
+        
         # 角色对话专属字段（仅角色扮演类型显示）
-        self._greeting_input = None
-        self._scenarios_input = None
+        self._scene_designs = []  # 场景设计列表 [{scene: "", suggestions: []}]
+        self._scene_designs_container = None
+        self._scene_tabs = None
         self._enable_suggestions_checkbox = None
         
+        # 时间段定义
+        self._time_periods = [
+            ("any", "任意时间", "00:00 - 24:00"),
+            ("midnight", "凌晨", "00:00 - 04:00"),
+            ("dawn", "拂晓", "04:00 - 06:00"),
+            ("morning", "晨间", "06:00 - 10:00"),
+            ("forenoon", "上午", "10:00 - 12:00"),
+            ("noon", "中午", "12:00 - 14:00"),
+            ("afternoon", "午后", "14:00 - 17:00"),
+            ("dusk", "傍晚", "17:00 - 19:00"),
+            ("night", "夜晚", "19:00 - 24:00"),
+        ]
+        
+        # 时间段 key 到中文名的映射
+        self._time_period_names = {key: name for key, name, _ in self._time_periods}
+        
         if persona_type == 'roleplay':
-            # 问候语
-            greeting_label = QLabel("问候语:")
-            greeting_label.setStyleSheet(f"color: {c['text']};")
-            greeting_label.setFont(QFont("Microsoft YaHei UI", 11))
-            layout.addWidget(greeting_label)
+            # 场景设计
+            scene_header = QHBoxLayout()
+            scene_label = QLabel("场景设计:")
+            scene_label.setStyleSheet(f"color: {c['text']};")
+            scene_label.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+            scene_header.addWidget(scene_label)
             
-            self._greeting_input = QTextEdit()
-            self._greeting_input.setPlaceholderText("角色的开场问候语...\n\n例如：你好主人～我是你的专属猫娘♡")
-            self._greeting_input.setMinimumHeight(80)
-            self._greeting_input.setMaximumHeight(100)
-            self._greeting_input.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {c['input_bg']};
-                    border: 2px solid {c['border']};
-                    border-radius: 8px;
-                    padding: 10px;
-                    color: {c['text']};
-                    font-size: 13px;
-                    line-height: 1.5;
+            scene_hint = QLabel("（根据时间段触发对应场景）")
+            scene_hint.setStyleSheet(f"color: {c['text_dim']}; font-size: 11px;")
+            scene_header.addWidget(scene_hint)
+            scene_header.addStretch()
+            
+            # 添加场景按钮
+            add_scene_btn = QPushButton("➕ 添加场景")
+            add_scene_btn.setFixedHeight(28)
+            add_scene_btn.setCursor(Qt.PointingHandCursor)
+            add_scene_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {c['accent']};
+                    color: white;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: 500;
+                    padding: 0 12px;
                 }}
-                QTextEdit:focus {{
-                    border-color: {c['accent']};
-                }}
-                QTextEdit:hover {{
-                    border-color: {c['text_dim']};
+                QPushButton:hover {{
+                    background-color: {c['accent_hover']};
                 }}
             """)
-            if is_edit and edit_data:
-                self._greeting_input.setText(edit_data.get('greeting', ''))
-            layout.addWidget(self._greeting_input)
+            add_scene_btn.clicked.connect(self._add_scene_design)
+            scene_header.addWidget(add_scene_btn)
+            layout.addLayout(scene_header)
             
-            # 场景选项
-            scenarios_label = QLabel("场景选项（每行一个）:")
-            scenarios_label.setStyleSheet(f"color: {c['text']};")
-            scenarios_label.setFont(QFont("Microsoft YaHei UI", 11))
-            layout.addWidget(scenarios_label)
-            
-            self._scenarios_input = QTextEdit()
-            self._scenarios_input.setPlaceholderText("每行一个场景选项...\n\n例如：\n今天想做什么呢？\n要不要一起玩游戏？\n给主人按摩放松一下～")
-            self._scenarios_input.setMinimumHeight(100)
-            self._scenarios_input.setMaximumHeight(120)
-            self._scenarios_input.setStyleSheet(f"""
-                QTextEdit {{
-                    background-color: {c['input_bg']};
-                    border: 2px solid {c['border']};
-                    border-radius: 8px;
-                    padding: 10px;
-                    color: {c['text']};
-                    font-size: 13px;
-                    line-height: 1.5;
+            # 场景卡片容器（横向滚动）
+            self._scene_cards_scroll = QScrollArea()
+            self._scene_cards_scroll.setWidgetResizable(True)
+            self._scene_cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self._scene_cards_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._scene_cards_scroll.setFixedHeight(170)
+            self._scene_cards_scroll.setStyleSheet(f"""
+                QScrollArea {{
+                    border: none;
+                    background-color: transparent;
                 }}
-                QTextEdit:focus {{
-                    border-color: {c['accent']};
+                QScrollBar:horizontal {{
+                    background-color: transparent;
+                    height: 8px;
+                    margin: 0px;
                 }}
-                QTextEdit:hover {{
-                    border-color: {c['text_dim']};
+                QScrollBar::handle:horizontal {{
+                    background-color: {c['scrollbar']};
+                    border-radius: 4px;
+                    min-width: 30px;
+                }}
+                QScrollBar::handle:horizontal:hover {{
+                    background-color: {c['scrollbar_hover']};
+                }}
+                QScrollBar::add-line:horizontal,
+                QScrollBar::sub-line:horizontal {{
+                    width: 0px;
                 }}
             """)
+            
+            self._scene_cards_container = QWidget()
+            self._scene_cards_layout = QHBoxLayout(self._scene_cards_container)
+            self._scene_cards_layout.setContentsMargins(0, 0, 0, 0)
+            self._scene_cards_layout.setSpacing(10)
+            self._scene_cards_layout.setAlignment(Qt.AlignLeft)
+            self._scene_cards_scroll.setWidget(self._scene_cards_container)
+            layout.addWidget(self._scene_cards_scroll)
+            
+            # 场景编辑区域
+            self._scene_edit_container = QFrame()
+            self._scene_edit_container.setStyleSheet(f"""
+                QFrame {{
+                    border: 1px solid {c['border']};
+                    border-radius: 8px;
+                    background-color: {c['bg_secondary']};
+                }}
+            """)
+            self._scene_edit_layout = QVBoxLayout(self._scene_edit_container)
+            self._scene_edit_layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(self._scene_edit_container)
+            
+            self._current_scene_index = -1  # 当前选中的场景索引
+            self._scene_tabs = None  # 兼容旧代码
+            
+            # 加载已有场景设计
             if is_edit and edit_data:
-                scenarios = edit_data.get('scenarios', [])
-                if scenarios:
-                    self._scenarios_input.setText('\n'.join(scenarios))
-            layout.addWidget(self._scenarios_input)
+                scene_designs = edit_data.get('scene_designs', [])
+                if scene_designs:
+                    self._scene_designs = scene_designs.copy()
+                else:
+                    # 兼容旧数据：将 greeting 和 scenarios 转换为场景设计
+                    old_greeting = edit_data.get('greeting', '')
+                    old_scenarios = edit_data.get('scenarios', [])
+                    if old_greeting or old_scenarios:
+                        self._scene_designs = [{
+                            'name': '场景 1',
+                            'time_period': 'any',
+                            'scene': old_greeting,
+                            'suggestions': old_scenarios[:3] if old_scenarios else []
+                        }]
+            
+            self._refresh_scene_designs_ui()
+            
+            layout.addSpacing(10)
             
             # 启用推荐回复
             from PySide6.QtWidgets import QCheckBox
@@ -1584,6 +1885,11 @@ class SettingsPage(QWidget):
                 edit_data.get('enable_suggestions', True) if (is_edit and edit_data) else True
             )
             layout.addWidget(self._enable_suggestions_checkbox)
+            
+            # 提示信息
+            suggestions_hint = QLabel("⚠️ 启用会增加存储消耗，降低回复速度")
+            suggestions_hint.setStyleSheet(f"color: {c['text_dim']}; font-size: 11px; margin-left: 28px;")
+            layout.addWidget(suggestions_hint)
         
         # 背景图片管理
         bg_label = QLabel("聊天背景图片:")
@@ -1692,6 +1998,77 @@ class SettingsPage(QWidget):
         bg_btn_row.addWidget(clear_bg_btn)
         
         bg_btn_row.addStretch()
+        
+        # 轮播间隔设置
+        interval_label = QLabel("轮播间隔:")
+        interval_label.setStyleSheet(f"color: {c['text']};")
+        interval_label.setFont(QFont("Microsoft YaHei UI", 11))
+        bg_btn_row.addWidget(interval_label)
+        
+        from PySide6.QtWidgets import QSpinBox
+        self._dialog_interval_spin = QSpinBox()
+        self._dialog_interval_spin.setRange(3, 60)
+        self._dialog_interval_spin.setValue(self.background_interval)
+        self._dialog_interval_spin.setSuffix(" 秒")
+        self._dialog_interval_spin.setFixedWidth(80)
+        self._dialog_interval_spin.setFixedHeight(34)
+        self._dialog_interval_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {c['input_bg']};
+                border: 2px solid {c['border']};
+                border-radius: 8px;
+                padding: 6px 10px;
+                color: {c['text']};
+                font-size: 13px;
+            }}
+            QSpinBox:focus {{
+                border-color: {c['accent']};
+            }}
+            QSpinBox:hover {{
+                border-color: {c['text_dim']};
+            }}
+            QSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left: 1px solid {c['border']};
+                border-top-right-radius: 6px;
+                background-color: {c['bg_tertiary']};
+            }}
+            QSpinBox::up-button:hover {{
+                background-color: {c['hover']};
+            }}
+            QSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 20px;
+                border-left: 1px solid {c['border']};
+                border-bottom-right-radius: 6px;
+                background-color: {c['bg_tertiary']};
+            }}
+            QSpinBox::down-button:hover {{
+                background-color: {c['hover']};
+            }}
+            QSpinBox::up-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 5px solid {c['text']};
+                width: 0px;
+                height: 0px;
+            }}
+            QSpinBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {c['text']};
+                width: 0px;
+                height: 0px;
+            }}
+        """)
+        self._dialog_interval_spin.valueChanged.connect(self._on_dialog_interval_changed)
+        bg_btn_row.addWidget(self._dialog_interval_spin)
+        
         bg_layout.addLayout(bg_btn_row)
         
         layout.addWidget(bg_container)
@@ -1745,7 +2122,48 @@ class SettingsPage(QWidget):
             }}
         """)
         
-        buttons.accepted.connect(dialog.accept)
+        # 保存输入框的默认样式
+        name_default_style = name_input.styleSheet()
+        prompt_default_style = prompt_input.styleSheet()
+        
+        # 错误样式
+        error_border_style = f"border: 2px solid {c['error']};"
+        
+        def validate_and_save():
+            """验证并保存"""
+            name = name_input.text().strip()
+            prompt = prompt_input.toPlainText().strip()
+            
+            # 重置样式
+            name_input.setStyleSheet(name_default_style)
+            prompt_input.setStyleSheet(prompt_default_style)
+            
+            # 验证必填项
+            has_error = False
+            
+            if not name:
+                # 名称为空，显示错误
+                name_input.setStyleSheet(name_default_style + error_border_style)
+                name_input.setFocus()
+                name_input.setPlaceholderText("请输入名称")
+                has_error = True
+            
+            if not prompt:
+                # 提示词为空，显示错误
+                prompt_input.setStyleSheet(prompt_default_style + error_border_style)
+                if not has_error:
+                    prompt_input.setFocus()
+                prompt_input.setPlaceholderText("请输入系统提示词")
+                has_error = True
+            
+            if has_error:
+                return
+            
+            # 验证通过，关闭对话框
+            dialog.accept()
+        
+        ok_btn.clicked.disconnect()  # 断开默认连接
+        ok_btn.clicked.connect(validate_and_save)
         buttons.rejected.connect(dialog.reject)
         button_layout.addWidget(buttons)
         
@@ -1759,72 +2177,74 @@ class SettingsPage(QWidget):
             persona_type = self._current_persona_type  # 获取类型
             
             # 获取角色对话字段
-            greeting = ""
-            scenarios = []
+            scene_designs = []
             enable_suggestions = True
+            gender = ""
+            user_identity = ""
             
             if persona_type == 'roleplay':
-                if self._greeting_input:
-                    greeting = self._greeting_input.toPlainText().strip()
-                if self._scenarios_input:
-                    scenarios_text = self._scenarios_input.toPlainText().strip()
-                    if scenarios_text:
-                        scenarios = [s.strip() for s in scenarios_text.split('\n') if s.strip()]
+                # 收集用户身份设计
+                if self._user_identity_input:
+                    user_identity = self._user_identity_input.toPlainText().strip()
+                # 收集场景设计数据
+                scene_designs = self._scene_designs.copy()
                 if self._enable_suggestions_checkbox:
                     enable_suggestions = self._enable_suggestions_checkbox.isChecked()
+                if self._gender_combo:
+                    gender_index = self._gender_combo.currentIndex()
+                    gender_map = {0: '', 1: '男', 2: '女', 3: '其他'}
+                    gender = gender_map.get(gender_index, '')
             
-            if name and prompt:
-                from core.media_manager import get_media_manager
-                media_manager = get_media_manager()
-                
-                # 处理图标路径
-                icon_path_to_save = ""
-                # 优先使用裁剪后的 QPixmap（新上传的图标）
-                if hasattr(self, '_selected_icon_pixmap') and self._selected_icon_pixmap:
-                    if is_edit:
-                        icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, edit_key)
-                    else:
-                        # 新建时使用临时 key，稍后会被替换
-                        from datetime import datetime
-                        temp_key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                        icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, temp_key)
-                # 兼容旧的文件路径方式
-                elif self._selected_icon_path:
-                    # 保留原有的自定义图标路径（编辑时未更改图标）
-                    icon_path_to_save = self._selected_icon_path
-                # 编辑模式下，如果原本有自定义图标但没有重新选择，保留原图标
-                elif is_edit and edit_data and edit_data.get('icon_path'):
-                    icon_path_to_save = edit_data.get('icon_path')
-                
+            from core.media_manager import get_media_manager
+            media_manager = get_media_manager()
+            
+            # 处理图标路径
+            icon_path_to_save = ""
+            # 优先使用裁剪后的 QPixmap（新上传的图标）
+            if hasattr(self, '_selected_icon_pixmap') and self._selected_icon_pixmap:
                 if is_edit:
-                    # 编辑模式
-                    self.persona_edited.emit(
-                        edit_key, name, persona_type,
-                        self._selected_icon if not icon_path_to_save else "📷",
-                        desc, prompt,
-                        icon_path_to_save,
-                        self._persona_backgrounds,  # 背景图片列表
-                        greeting,  # 问候语
-                        scenarios,  # 场景选项
-                        enable_suggestions  # 启用推荐
-                    )
+                    icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, edit_key)
                 else:
-                    # 添加模式 - 使用时间戳生成唯一标识
+                    # 新建时使用临时 key，稍后会被替换
                     from datetime import datetime
-                    key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    self.persona_added.emit(
-                        key, name, persona_type,
-                        self._selected_icon if not icon_path_to_save else "📷",
-                        desc, prompt,
-                        icon_path_to_save,
-                        self._persona_backgrounds,  # 背景图片列表
-                        greeting,  # 问候语
-                        scenarios,  # 场景选项
-                        enable_suggestions  # 启用推荐
-                    )
+                    temp_key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    icon_path_to_save = media_manager.save_persona_icon(self._selected_icon_pixmap, temp_key)
+            # 兼容旧的文件路径方式
+            elif self._selected_icon_path:
+                # 保留原有的自定义图标路径（编辑时未更改图标）
+                icon_path_to_save = self._selected_icon_path
+            # 编辑模式下，如果原本有自定义图标但没有重新选择，保留原图标
+            elif is_edit and edit_data and edit_data.get('icon_path'):
+                icon_path_to_save = edit_data.get('icon_path')
+            
+            if is_edit:
+                # 编辑模式
+                self.persona_edited.emit(
+                    edit_key, name, persona_type,
+                    self._selected_icon if not icon_path_to_save else "📷",
+                    desc, prompt,
+                    icon_path_to_save,
+                    self._persona_backgrounds,  # 背景图片列表
+                    scene_designs,  # 场景设计
+                    enable_suggestions,  # 启用推荐
+                    gender,  # 性别
+                    user_identity  # 用户身份
+                )
             else:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "提示", "请填写名称和提示词")
+                # 添加模式 - 使用时间戳生成唯一标识
+                from datetime import datetime
+                key = f"persona_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                self.persona_added.emit(
+                    key, name, persona_type,
+                    self._selected_icon if not icon_path_to_save else "📷",
+                    desc, prompt,
+                    icon_path_to_save,
+                    self._persona_backgrounds,  # 背景图片列表
+                    scene_designs,  # 场景设计
+                    enable_suggestions,  # 启用推荐
+                    gender,  # 性别
+                    user_identity  # 用户身份
+                )
 
     def _on_icon_selected(self, emoji: str, btn):
         """选择预设图标"""
@@ -1906,6 +2326,383 @@ class SettingsPage(QWidget):
                     """)
                     self._update_icon_button_styles(c)
     
+    def _refresh_scene_designs_ui(self):
+        """刷新场景设计卡片 UI"""
+        if not hasattr(self, '_scene_cards_layout'):
+            return
+            
+        # 清空现有卡片
+        while self._scene_cards_layout.count():
+            item = self._scene_cards_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 清空编辑区域
+        while self._scene_edit_layout.count():
+            item = self._scene_edit_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        c = self.theme.colors
+        
+        if not self._scene_designs:
+            # 显示空状态
+            empty_label = QLabel("暂无场景设计，点击上方按钮添加")
+            empty_label.setStyleSheet(f"color: {c['text_dim']}; font-size: 12px;")
+            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setFixedHeight(150)
+            self._scene_cards_layout.addWidget(empty_label)
+            self._scene_edit_container.hide()
+            self._current_scene_index = -1
+        else:
+            # 创建场景卡片
+            for i, design in enumerate(self._scene_designs):
+                card = self._create_scene_card(i, design)
+                self._scene_cards_layout.addWidget(card)
+            
+            self._scene_cards_layout.addStretch()
+            self._scene_edit_container.show()
+            
+            # 选中第一个或保持当前选中
+            if self._current_scene_index < 0 or self._current_scene_index >= len(self._scene_designs):
+                self._current_scene_index = 0
+            self._select_scene_card(self._current_scene_index)
+    
+    def _create_scene_card(self, index: int, design: dict):
+        """创建场景卡片 120x150"""
+        c = self.theme.colors
+        scene_name = design.get('name', f'场景 {index + 1}')
+        time_period = design.get('time_period', 'any')
+        time_name = self._time_period_names.get(time_period, '任意时间')
+        
+        card = QFrame()
+        card.setFixedSize(120, 150)
+        card.setCursor(Qt.PointingHandCursor)
+        card.setProperty('scene_index', index)
+        card.setObjectName(f'scene_card_{index}')
+        
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 10, 8, 10)
+        card_layout.setSpacing(4)
+        
+        # 场景名称
+        name_label = QLabel(scene_name)
+        name_label.setStyleSheet(f"color: {c['text']}; font-size: 12px; font-weight: bold;")
+        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setWordWrap(True)
+        name_label.setMaximumHeight(36)
+        card_layout.addWidget(name_label)
+        
+        # 时间段
+        time_label = QLabel(time_name)
+        time_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 10px;")
+        time_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(time_label)
+        
+        # 下方留空（后续加入背景图）
+        card_layout.addStretch()
+        
+        # 卡片样式
+        self._update_scene_card_style(card, index == self._current_scene_index)
+        
+        # 点击事件
+        card.mousePressEvent = lambda e, idx=index: self._select_scene_card(idx)
+        
+        return card
+    
+    def _update_scene_card_style(self, card: QFrame, selected: bool):
+        """更新卡片样式"""
+        c = self.theme.colors
+        if selected:
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {c['bg_secondary']};
+                    border: 2px solid {c['accent']};
+                    border-radius: 10px;
+                }}
+            """)
+        else:
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {c['bg_tertiary']};
+                    border: 1px solid {c['border']};
+                    border-radius: 10px;
+                }}
+                QFrame:hover {{
+                    border-color: {c['accent']};
+                }}
+            """)
+    
+    def _select_scene_card(self, index: int):
+        """选中场景卡片"""
+        if index < 0 or index >= len(self._scene_designs):
+            return
+        
+        old_index = self._current_scene_index
+        self._current_scene_index = index
+        
+        # 更新卡片样式
+        for i in range(self._scene_cards_layout.count()):
+            item = self._scene_cards_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), QFrame):
+                card = item.widget()
+                card_index = card.property('scene_index')
+                if card_index is not None:
+                    self._update_scene_card_style(card, card_index == index)
+        
+        # 更新编辑区域
+        self._show_scene_edit_content(index)
+    
+    def _show_scene_edit_content(self, index: int):
+        """显示场景编辑内容"""
+        # 清空编辑区域
+        while self._scene_edit_layout.count():
+            item = self._scene_edit_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        if index < 0 or index >= len(self._scene_designs):
+            return
+        
+        design = self._scene_designs[index]
+        content = self._create_scene_edit_content(index, design)
+        self._scene_edit_layout.addWidget(content)
+    
+    def _create_scene_edit_content(self, index: int, design: dict):
+        """创建场景编辑内容"""
+        from PySide6.QtWidgets import QTextEdit, QComboBox, QLineEdit
+        c = self.theme.colors
+        
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+        
+        # 第一行：场景名称和时间段
+        row1 = QHBoxLayout()
+        
+        # 场景名称
+        name_label = QLabel("场景名称:")
+        name_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 11px;")
+        name_label.setFixedWidth(60)
+        row1.addWidget(name_label)
+        
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("如：深夜独守")
+        name_input.setText(design.get('name', f'场景 {index + 1}'))
+        name_input.setFixedHeight(30)
+        name_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {c['input_bg']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: {c['text']};
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {c['accent']};
+            }}
+        """)
+        name_input.textChanged.connect(lambda text: self._update_scene_design(index, 'name', text))
+        row1.addWidget(name_input, 1)
+        
+        row1.addSpacing(15)
+        
+        # 时间段选择
+        time_label = QLabel("时间段:")
+        time_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 11px;")
+        time_label.setFixedWidth(50)
+        row1.addWidget(time_label)
+        
+        time_combo = QComboBox()
+        time_combo.setFixedWidth(100)
+        time_combo.setFixedHeight(30)
+        for key, name, _ in self._time_periods:
+            time_combo.addItem(name, key)
+        
+        # 设置当前选中的时间段
+        current_period = design.get('time_period', 'any')
+        for i_t, (key, _, _) in enumerate(self._time_periods):
+            if key == current_period:
+                time_combo.setCurrentIndex(i_t)
+                break
+        
+        time_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {c['input_bg']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: {c['text']};
+                font-size: 11px;
+            }}
+            QComboBox:hover {{
+                border-color: {c['accent']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 4px solid {c['text']};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {c['input_bg']};
+                color: {c['text']};
+                selection-background-color: {c['accent']};
+                border: 1px solid {c['border']};
+            }}
+        """)
+        time_combo.currentIndexChanged.connect(lambda idx: self._update_scene_design_and_refresh_card(index, 'time_period', self._time_periods[idx][0]))
+        row1.addWidget(time_combo)
+        
+        row1.addSpacing(15)
+        
+        # 删除按钮
+        del_btn = QPushButton("🗑️ 删除")
+        del_btn.setFixedHeight(30)
+        del_btn.setCursor(Qt.PointingHandCursor)
+        del_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {c['error']};
+                border: 1px solid {c['error']};
+                border-radius: 6px;
+                font-size: 11px;
+                padding: 0 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {c['error']};
+                color: white;
+            }}
+        """)
+        del_btn.clicked.connect(lambda: self._remove_scene_design(index))
+        row1.addWidget(del_btn)
+        
+        layout.addLayout(row1)
+        
+        # 角色开场白
+        scene_label = QLabel("角色开场白:")
+        scene_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 11px;")
+        layout.addWidget(scene_label)
+        
+        scene_input = QTextEdit()
+        scene_input.setPlaceholderText("角色主动发送的消息...")
+        scene_input.setMinimumHeight(60)
+        scene_input.setMaximumHeight(80)
+        scene_input.setText(design.get('scene', ''))
+        scene_input.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {c['input_bg']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 8px;
+                color: {c['text']};
+                font-size: 12px;
+            }}
+            QTextEdit:focus {{
+                border-color: {c['accent']};
+            }}
+        """)
+        scene_input.textChanged.connect(lambda: self._update_scene_design(index, 'scene', scene_input.toPlainText()))
+        layout.addWidget(scene_input)
+        
+        # 推荐回复
+        suggestions_label = QLabel("推荐回复（最多3个，用[]包裹）:")
+        suggestions_label.setStyleSheet(f"color: {c['text_secondary']}; font-size: 11px;")
+        layout.addWidget(suggestions_label)
+        
+        suggestions_input = QTextEdit()
+        suggestions_input.setPlaceholderText("例如：[今天好想你啊～][我们一起玩游戏吧][给我讲个故事]")
+        suggestions_input.setMinimumHeight(50)
+        suggestions_input.setMaximumHeight(70)
+        suggestions = design.get('suggestions', [])
+        suggestions_input.setText(''.join(f'[{s}]' for s in suggestions) if suggestions else '')
+        suggestions_input.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {c['input_bg']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 8px;
+                color: {c['text']};
+                font-size: 12px;
+            }}
+            QTextEdit:focus {{
+                border-color: {c['accent']};
+            }}
+        """)
+        suggestions_input.textChanged.connect(lambda: self._update_scene_design(index, 'suggestions', suggestions_input.toPlainText()))
+        layout.addWidget(suggestions_input)
+        
+        return content
+    
+    def _update_scene_design_and_refresh_card(self, index: int, field: str, value: str):
+        """更新场景设计并刷新卡片"""
+        self._update_scene_design(index, field, value)
+        # 刷新卡片显示
+        self._refresh_scene_designs_ui()
+    
+    def _add_scene_design(self):
+        """添加新场景设计"""
+        new_index = len(self._scene_designs) + 1
+        self._scene_designs.append({
+            'name': f'场景 {new_index}',
+            'time_period': 'any',
+            'scene': '',
+            'suggestions': []
+        })
+        self._current_scene_index = len(self._scene_designs) - 1
+        self._refresh_scene_designs_ui()
+    
+    def _remove_scene_design(self, index: int):
+        """删除场景设计"""
+        if 0 <= index < len(self._scene_designs):
+            self._scene_designs.pop(index)
+            self._refresh_scene_designs_ui()
+    
+    def _update_scene_design(self, index: int, field: str, value: str):
+        """更新场景设计数据"""
+        if 0 <= index < len(self._scene_designs):
+            if field == 'name':
+                self._scene_designs[index]['name'] = value.strip() or f'场景 {index + 1}'
+                # 刷新卡片显示
+                self._refresh_scene_cards_only()
+            elif field == 'scene':
+                self._scene_designs[index]['scene'] = value.strip()
+            elif field == 'suggestions':
+                # 解析推荐回复，每个 [] 包含一个，最多3个
+                import re
+                matches = re.findall(r'\[([^\]]+)\]', value)
+                suggestions = [s.strip() for s in matches if s.strip()]
+                self._scene_designs[index]['suggestions'] = suggestions[:3]
+            elif field == 'time_period':
+                self._scene_designs[index]['time_period'] = value
+    
+    def _refresh_scene_cards_only(self):
+        """仅刷新场景卡片显示（不重建编辑区域）"""
+        if not hasattr(self, '_scene_cards_layout'):
+            return
+        
+        c = self.theme.colors
+        for i in range(self._scene_cards_layout.count()):
+            item = self._scene_cards_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), QFrame):
+                card = item.widget()
+                card_index = card.property('scene_index')
+                if card_index is not None and 0 <= card_index < len(self._scene_designs):
+                    design = self._scene_designs[card_index]
+                    # 更新卡片内的标签
+                    for child in card.findChildren(QLabel):
+                        if child.styleSheet() and 'font-weight: bold' in child.styleSheet():
+                            child.setText(design.get('name', f'场景 {card_index + 1}'))
+                        elif child.styleSheet() and 'font-size: 10px' in child.styleSheet():
+                            time_period = design.get('time_period', 'any')
+                            child.setText(self._time_period_names.get(time_period, '任意时间'))
+    
     def _add_persona_background(self, dialog):
         """添加助手背景图片"""
         from PySide6.QtWidgets import QFileDialog
@@ -1930,7 +2727,6 @@ class SettingsPage(QWidget):
     
     def _update_persona_bg_preview(self):
         """更新助手背景图片预览"""
-        from PySide6.QtGui import QPixmap
         from core.media_manager import get_media_manager
         
         # 清空现有预览
@@ -1949,64 +2745,21 @@ class SettingsPage(QWidget):
             empty_label.setAlignment(Qt.AlignCenter)
             self._bg_preview_layout.addWidget(empty_label)
         else:
-            # 显示所有背景图片预览
+            # 显示所有背景图片预览（使用可拖拽卡片）
             for i, relative_path in enumerate(self._persona_backgrounds):
-                # 获取绝对路径
                 absolute_path = media_manager.get_absolute_path(relative_path)
                 
-                frame = QFrame()
-                frame.setFixedSize(80, 80)
-                frame.setStyleSheet(f"""
-                    QFrame {{
-                        border: 2px solid {c['border']};
-                        border-radius: 8px;
-                        background-color: {c['bg']};
-                    }}
-                """)
-                
-                frame_layout = QVBoxLayout(frame)
-                frame_layout.setContentsMargins(2, 2, 2, 2)
-                frame_layout.setSpacing(2)
-                
-                # 图片预览
-                preview = QLabel()
-                preview.setFixedSize(72, 56)
-                preview.setAlignment(Qt.AlignCenter)
-                
-                if os.path.exists(absolute_path):
-                    pixmap = QPixmap(absolute_path)
-                    if not pixmap.isNull():
-                        pixmap = pixmap.scaled(72, 56, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                        preview.setPixmap(pixmap)
-                    else:
-                        preview.setText("❌")
-                        preview.setStyleSheet(f"color: {c['error']};")
-                else:
-                    preview.setText("❌")
-                    preview.setStyleSheet(f"color: {c['error']};")
-                frame_layout.addWidget(preview)
-                
-                # 删除按钮
-                del_btn = QPushButton("✕")
-                del_btn.setFixedSize(72, 18)
-                del_btn.setCursor(Qt.PointingHandCursor)
-                del_btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {c['error']}80;
-                        color: white;
-                        border: none;
-                        border-radius: 4px;
-                        font-size: 10px;
-                        font-weight: bold;
-                    }}
-                    QPushButton:hover {{
-                        background-color: {c['error']};
-                    }}
-                """)
-                del_btn.clicked.connect(lambda checked, idx=i: self._remove_persona_background(idx))
-                frame_layout.addWidget(del_btn)
-                
-                self._bg_preview_layout.addWidget(frame)
+                card = DraggableBackgroundCard(i, absolute_path, c, self)
+                card.deleted.connect(self._remove_persona_background)
+                card.order_changed.connect(self._reorder_persona_bg)
+                self._bg_preview_layout.addWidget(card)
+    
+    def _reorder_persona_bg(self, from_index: int, to_index: int):
+        """重新排序助手背景图片"""
+        if 0 <= from_index < len(self._persona_backgrounds) and 0 <= to_index < len(self._persona_backgrounds):
+            item = self._persona_backgrounds.pop(from_index)
+            self._persona_backgrounds.insert(to_index, item)
+            self._update_persona_bg_preview()
     
     def _remove_persona_background(self, index):
         """移除背景图片"""
@@ -2495,7 +3248,7 @@ class SettingsPage(QWidget):
         bg_title.setFont(QFont("Microsoft YaHei UI", 14, QFont.Bold))
         bg_layout.addWidget(bg_title)
         
-        bg_desc = QLabel("添加多张背景图片，聊天时自动轮播（推荐比例4:3）")
+        bg_desc = QLabel("添加多张背景图片，聊天时自动轮播（推荐比例4:3），拖动排序")
         bg_desc.setStyleSheet(f"color: {c['text_secondary']};")
         bg_desc.setFont(QFont("Microsoft YaHei UI", 11))
         bg_desc.setObjectName("descLabel")

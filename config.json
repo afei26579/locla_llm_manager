@@ -4,6 +4,6 @@
   "ollama_host": "127.0.0.1",
   "ollama_port": 11434,
   "language": "zh_CN",
-  "theme": "dark",
+  "theme": "light",
   "debug": true
 }
