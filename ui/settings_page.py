@@ -1008,15 +1008,8 @@ class SettingsPage(QWidget):
             self.assistants_layout.insertWidget(self.assistants_layout.count() - 1, card)
         
         # 更新角色扮演列表（按名称排序）
-        while self.roleplays_layout.count() > 1:
-            item = self.roleplays_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        sorted_roleplays = sorted(roleplays.items(), key=lambda x: x[1].get('name', ''))
-        for key, persona in sorted_roleplays:
-            card = self._create_persona_card(key, persona)
-            self.roleplays_layout.insertWidget(self.roleplays_layout.count() - 1, card)
+        self._all_roleplays = roleplays  # 保存所有角色用于筛选
+        self._update_roleplays_display()
         
         # 确保容器透明
         if hasattr(self, 'assistants_container'):
@@ -1207,6 +1200,77 @@ class SettingsPage(QWidget):
             logger.warning("roleplays_container 不存在")
         
         logger.info(f"助手卡片样式更新完成，共更新 {updated_count} 个卡片")
+
+    def _update_roleplays_display(self):
+        """根据当前筛选条件更新角色扮演列表显示"""
+        # 清空现有列表
+        while self.roleplays_layout.count() > 1:
+            item = self.roleplays_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        roleplays = getattr(self, '_all_roleplays', {})
+        gender_filter = getattr(self, '_roleplay_gender_filter', 'all')
+        
+        # 根据性别筛选（数据库存储的是中文：男、女）
+        if gender_filter == 'all':
+            filtered = roleplays
+        else:
+            gender_map = {'male': '男', 'female': '女'}
+            target_gender = gender_map.get(gender_filter, '')
+            filtered = {k: v for k, v in roleplays.items() if v.get('gender', '') == target_gender}
+        
+        # 按名称排序并显示
+        sorted_roleplays = sorted(filtered.items(), key=lambda x: x[1].get('name', ''))
+        for key, persona in sorted_roleplays:
+            card = self._create_persona_card(key, persona)
+            self.roleplays_layout.insertWidget(self.roleplays_layout.count() - 1, card)
+    
+    def _filter_roleplay_by_gender(self, gender: str):
+        """按性别筛选角色"""
+        self._roleplay_gender_filter = gender
+        self._update_gender_filter_styles()
+        self._update_roleplays_display()
+        # 更新卡片样式
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._update_persona_cards_style)
+    
+    def _update_gender_filter_styles(self):
+        """更新性别筛选按钮样式"""
+        c = self.theme.colors
+        gender_filter = getattr(self, '_roleplay_gender_filter', 'all')
+        
+        # 选中样式
+        selected_style = f"""
+            QPushButton {{
+                background-color: {c['accent']};
+                color: white;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+        """
+        # 未选中样式
+        normal_style = f"""
+            QPushButton {{
+                background-color: {c['bg_tertiary']};
+                color: {c['text_secondary']};
+                border: 1px solid {c['border']};
+                border-radius: 8px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {c['hover']};
+                color: {c['text']};
+            }}
+        """
+        
+        if hasattr(self, 'gender_all_btn'):
+            self.gender_all_btn.setStyleSheet(selected_style if gender_filter == 'all' else normal_style)
+        if hasattr(self, 'gender_male_btn'):
+            self.gender_male_btn.setStyleSheet(selected_style if gender_filter == 'male' else normal_style)
+        if hasattr(self, 'gender_female_btn'):
+            self.gender_female_btn.setStyleSheet(selected_style if gender_filter == 'female' else normal_style)
 
     def _create_persona_card(self, key: str, persona: dict):
         """创建助手卡片"""
@@ -3473,6 +3537,10 @@ class SettingsPage(QWidget):
         self.roleplay_desc.setStyleSheet(f"color: {c['text_secondary']}; padding: 8px;")
         roleplay_layout.addWidget(self.roleplay_desc)
         
+        # 按钮和筛选标签行
+        roleplay_btn_row = QHBoxLayout()
+        roleplay_btn_row.setSpacing(15)
+        
         # 添加角色按钮
         self.add_roleplay_btn = QPushButton("➕ 添加角色扮演")
         self.add_roleplay_btn.setFixedSize(150, 40)
@@ -3490,7 +3558,33 @@ class SettingsPage(QWidget):
                 background-color: {c['accent_hover']};
             }}
         """)
-        roleplay_layout.addWidget(self.add_roleplay_btn)
+        roleplay_btn_row.addWidget(self.add_roleplay_btn)
+        
+        # 性别筛选标签
+        self._roleplay_gender_filter = 'all'  # 当前筛选：all, male, female
+        
+        self.gender_all_btn = QPushButton("全部")
+        self.gender_all_btn.setFixedSize(60, 32)
+        self.gender_all_btn.setCursor(Qt.PointingHandCursor)
+        self.gender_all_btn.clicked.connect(lambda: self._filter_roleplay_by_gender('all'))
+        roleplay_btn_row.addWidget(self.gender_all_btn)
+        
+        self.gender_male_btn = QPushButton("♂ 男")
+        self.gender_male_btn.setFixedSize(60, 32)
+        self.gender_male_btn.setCursor(Qt.PointingHandCursor)
+        self.gender_male_btn.clicked.connect(lambda: self._filter_roleplay_by_gender('male'))
+        roleplay_btn_row.addWidget(self.gender_male_btn)
+        
+        self.gender_female_btn = QPushButton("♀ 女")
+        self.gender_female_btn.setFixedSize(60, 32)
+        self.gender_female_btn.setCursor(Qt.PointingHandCursor)
+        self.gender_female_btn.clicked.connect(lambda: self._filter_roleplay_by_gender('female'))
+        roleplay_btn_row.addWidget(self.gender_female_btn)
+        
+        self._update_gender_filter_styles()
+        
+        roleplay_btn_row.addStretch()
+        roleplay_layout.addLayout(roleplay_btn_row)
         
         # 角色扮演列表
         self.roleplays_container = QWidget()
