@@ -26,6 +26,10 @@ class SuggestionButton(QPushButton):
         self.setText(text)
         self.setToolTip(text)
         
+        # 根据文字长度自适应宽度
+        self.setSizePolicy(self.sizePolicy().horizontalPolicy(), self.sizePolicy().verticalPolicy())
+        self.adjustSize()
+        
         self.clicked.connect(lambda: self.clicked_with_text.emit(self.full_text))
         self.apply_style()
         
@@ -36,8 +40,11 @@ class SuggestionButton(QPushButton):
         """应用主题样式"""
         c = self.theme.colors
         
-        # 提取 RGB
+        # 获取主题背景色作为按钮背景
+        bg_color = c.get('bg_secondary', c.get('bg', '#1a1a2e'))
         accent = c['accent']
+        
+        # 提取 accent RGB 用于边框
         try:
             r = int(accent[1:3], 16)
             g = int(accent[3:5], 16)
@@ -47,24 +54,16 @@ class SuggestionButton(QPushButton):
         
         self.setStyleSheet(f"""
             QPushButton {{
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba({r}, {g}, {b}, 0.1),
-                    stop:1 rgba({r}, {g}, {b}, 0.2)
-                );
-                border: 2px solid {c['accent']};
+                background-color: {bg_color};
+                border: 1px solid rgba({r}, {g}, {b}, 0.5);
                 border-radius: 18px;
-                padding: 8px 16px;
+                padding: 8px 20px;
                 color: {c['text']};
                 text-align: left;
             }}
             QPushButton:hover {{
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba({r}, {g}, {b}, 0.25),
-                    stop:1 rgba({r}, {g}, {b}, 0.35)
-                );
-                border-color: {c['accent_hover']};
+                background-color: {c.get('bg_tertiary', bg_color)};
+                border-color: {c['accent']};
             }}
             QPushButton:pressed {{
                 background-color: {c['accent']};
@@ -74,7 +73,7 @@ class SuggestionButton(QPushButton):
 
 
 class SuggestionButtonGroup(QWidget):
-    """按钮组容器（每行一个，垂直排列）"""
+    """按钮组容器（每行一个，垂直排列，左对齐）"""
     button_clicked = Signal(str)
     
     def __init__(self, suggestions: list, parent=None):
@@ -87,6 +86,7 @@ class SuggestionButtonGroup(QWidget):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(20, 10, 20, 10)
         self.main_layout.setSpacing(8)
+        self.main_layout.setAlignment(Qt.AlignLeft)  # 左对齐
         
         # 创建按钮并布局
         self._create_buttons()
@@ -95,7 +95,7 @@ class SuggestionButtonGroup(QWidget):
         self.theme.theme_changed.connect(self.apply_style)
     
     def _create_buttons(self):
-        """创建按钮，每行一个"""
+        """创建按钮，每行一个，自适应宽度"""
         # 清除旧布局
         while self.main_layout.count():
             item = self.main_layout.takeAt(0)
@@ -105,10 +105,18 @@ class SuggestionButtonGroup(QWidget):
         self.buttons = []
         
         for text in self.suggestions:
+            # 用水平布局包裹按钮，实现左对齐
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setAlignment(Qt.AlignLeft)
+            
             btn = SuggestionButton(text, self)
             btn.clicked_with_text.connect(self.button_clicked.emit)
             self.buttons.append(btn)
-            self.main_layout.addWidget(btn)
+            
+            row.addWidget(btn)
+            row.addStretch()  # 右侧弹性空间
+            self.main_layout.addLayout(row)
     
     def apply_style(self):
         """应用主题样式"""

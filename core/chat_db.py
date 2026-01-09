@@ -12,6 +12,72 @@ from .logger import get_logger
 logger = get_logger('chat')
 
 
+def parse_persona_profile(system_prompt: str) -> dict:
+    """从系统提示词中解析角色档案信息
+    
+    解析模板格式中的角色信息，返回 profile 字典
+    """
+    profile = {}
+    
+    if not system_prompt:
+        return profile
+    
+    # 解析姓名
+    name_match = re.search(r'[-\-]\s*姓名[:：]\s*(.+?)(?:\n|$)', system_prompt)
+    if name_match:
+        profile['name'] = name_match.group(1).strip()
+    
+    # 解析性别/年龄
+    gender_match = re.search(r'[-\-]\s*性别[/／]?年龄[:：]\s*(.+?)(?:\n|$)', system_prompt)
+    if gender_match:
+        text = gender_match.group(1).strip()
+        # 尝试分离性别和年龄
+        if '/' in text or '／' in text:
+            parts = re.split(r'[/／]', text)
+            profile['gender'] = parts[0].strip() if parts else ''
+            profile['age'] = parts[1].strip() if len(parts) > 1 else ''
+        else:
+            profile['gender_age'] = text
+    
+    # 解析身高/体重/三围
+    hw_match = re.search(r'[-\-]\s*身高[/／]?体重[/／]?三围[:：]\s*(.+?)(?:\n|$)', system_prompt)
+    if hw_match:
+        text = hw_match.group(1).strip()
+        # 尝试解析具体数值
+        height_m = re.search(r'(\d+\.?\d*)\s*[cC][mM]', text)
+        if height_m:
+            profile['height'] = height_m.group(1) + 'cm'
+        weight_m = re.search(r'(\d+\.?\d*)\s*[kK][gG]', text)
+        if weight_m:
+            profile['weight'] = weight_m.group(1) + 'kg'
+        # 三围
+        measurements_m = re.search(r'(\d+[-/]\d+[-/]\d+)', text)
+        if measurements_m:
+            profile['measurements'] = measurements_m.group(1)
+        # 如果没有解析出具体数值，保存原文
+        if not any(k in profile for k in ['height', 'weight', 'measurements']):
+            profile['body'] = text
+    
+    # 解析职业/身份
+    occupation_match = re.search(r'[-\-]\s*职业[/／]?身份[:：]\s*(.+?)(?:\n|$)', system_prompt)
+    if occupation_match:
+        profile['occupation'] = occupation_match.group(1).strip()
+    
+    # 解析精通技艺
+    skills_match = re.search(r'[-\-]\s*精通技艺[:：]\s*(.+?)(?:\n|$)', system_prompt)
+    if skills_match:
+        profile['skills'] = skills_match.group(1).strip()
+    
+    # 解析背景故事（## 2. 背景故事 到下一个 ## 之间的内容）
+    bg_match = re.search(r'##\s*2\.\s*背景故事\s*\n(.*?)(?=##|\Z)', system_prompt, re.DOTALL)
+    if bg_match:
+        bg_text = bg_match.group(1).strip()
+        if bg_text and not bg_text.startswith('['):  # 排除占位符
+            profile['background'] = bg_text
+    
+    return profile
+
+
 def filter_think_content(text: str) -> str:
     """过滤掉思考标签及其内容
     
@@ -265,20 +331,22 @@ class ChatManager:
     def add_persona(self, key: str, name: str, icon: str, description: str, 
                    system_prompt: str, icon_path: str = "", persona_type: str = "assistant",
                    background_images: list = None, scene_designs: list = None,
-                   enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
+                   enable_suggestions: bool = True, gender: str = "", user_identity: str = "",
+                   brief: str = "", is_system: bool = False, profile: dict = None):
         """添加人格"""
         bg_str = json.dumps(background_images) if background_images else ''
         self.db.add_persona(key, name, icon, icon_path, description, system_prompt, persona_type, bg_str,
-                           scene_designs, enable_suggestions, gender, user_identity)
+                           scene_designs, enable_suggestions, gender, user_identity, brief, is_system, profile)
     
     def update_persona(self, key: str, name: str, icon: str, description: str, 
                       system_prompt: str, icon_path: str = "", persona_type: str = "assistant",
                       background_images: list = None, scene_designs: list = None,
-                      enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
+                      enable_suggestions: bool = True, gender: str = "", user_identity: str = "",
+                      brief: str = "", is_system: bool = False, profile: dict = None):
         """更新人格"""
         bg_str = json.dumps(background_images) if background_images else ''
         self.db.add_persona(key, name, icon, icon_path, description, system_prompt, persona_type, bg_str,
-                           scene_designs, enable_suggestions, gender, user_identity)
+                           scene_designs, enable_suggestions, gender, user_identity, brief, is_system, profile)
     
     def delete_persona(self, key: str) -> bool:
         """删除人格（debug 模式下允许删除默认助手）"""
@@ -344,9 +412,14 @@ class ChatManager:
         # 如果有用户身份设计，将其加入系统提示词
         if system_prompt:
             if user_identity:
-                full_prompt = f"{system_prompt}\n\n【用户身份】\n{user_identity}"
+                # 优先替换模板占位符，否则追加到末尾
+                if '{user_identity}' in system_prompt:
+                    full_prompt = system_prompt.replace('{user_identity}', user_identity)
+                else:
+                    full_prompt = f"{system_prompt}\n\n【用户身份】\n{user_identity}"
             else:
-                full_prompt = system_prompt
+                # 没有用户身份时，清除占位符或保持原样
+                full_prompt = system_prompt.replace('{user_identity}', '[未设定]')
             messages.append({"role": "system", "content": full_prompt})
         
         # 检查是否是角色扮演类型
@@ -531,6 +604,11 @@ class ChatManager:
                             logger.error(f"解析响应行失败: {e}, line={line}")
                 
                 logger.info(f"流式响应完成: 收到 {chunk_count} 个块, 总长度 {len(full_response)} 字符, 用户停止={user_stopped}")
+                
+                # 用户主动停止，不保存 AI 回复（用户消息已保存，保留）
+                if user_stopped:
+                    logger.info("[用户停止] 跳过保存 AI 回复")
+                    return full_response
                 
                 # 处理空回复（非用户主动停止的情况）
                 if not full_response.strip() and not user_stopped:
@@ -834,8 +912,9 @@ class ChatManager:
         return random.choice(matching_scenes)
     
     def generate_suggestions(self, ai_response: str, count: int = 3) -> list:
-        """根据 AI 回复生成推荐选项"""
+        """根据 AI 回复生成推荐选项（包含角色背景和用户关系）"""
         import time
+        import re
         start_time = time.time()
         logger.info(f"[推荐生成] 开始生成推荐，count={count}")
         logger.debug(f"[推荐生成] AI原始回复长度: {len(ai_response)}, 内容前100字: {ai_response[:100]}...")
@@ -855,13 +934,58 @@ class ChatManager:
                 logger.warning("[推荐生成] 过滤后回复为空，跳过生成")
                 return []
             
-            # 简化的 prompt，要求更快速的响应
-            prompt = f"""根据 AI 的回复，生成 {count} 个简短的用户回复选项。
-要求：每个选项 10-15 字，自然流畅，只返回选项文本（每行一个，不要编号）。
+            # 提取 AI 对话内容（双引号中的内容），忽略动作描写
+            dialogue_matches = re.findall(r'["""]([^"""]+)["""]', filtered_response)
+            if dialogue_matches:
+                ai_dialogue = ' '.join(dialogue_matches)
+            else:
+                # 如果没有找到引号内容，使用原文但移除括号内容
+                ai_dialogue = re.sub(r'[（(][^）)]*[）)]', '', filtered_response)
+            
+            logger.debug(f"[推荐生成] AI对话内容: {ai_dialogue[:100]}...")
+            
+            # 获取最后一条用户消息
+            messages = self.get_all_messages_sorted()
+            user_message = ""
+            for msg in reversed(messages):
+                if msg.get('role') == 'user':
+                    user_message = msg.get('content', '')[:150]
+                    break
+            
+            logger.debug(f"[推荐生成] 用户消息: {user_message[:50]}...")
+            
+            # 获取当前角色信息
+            persona = self.get_current_persona()
+            brief = persona.get('brief', '')  # 角色简介
+            user_identity = persona.get('user_identity', '')  # 用户与角色关系
+            persona_name = persona.get('name', 'AI')
+            
+            logger.debug(f"[推荐生成] 角色: {persona_name}, 简介: {brief[:50] if brief else '无'}...")
+            logger.debug(f"[推荐生成] 用户关系: {user_identity[:50] if user_identity else '无'}...")
+            
+            # 构建推荐提示词
+            prompt = f"""你是对话回复推荐系统。用户正在和AI扮演的"{persona_name}"进行恋爱角色扮演对话。
+现在需要你为【用户】生成3个可以回复给"{persona_name}"的选项。
 
-AI 回复：{filtered_response[:200]}
+## 重要：你生成的是【用户】要说的话，不是"{persona_name}"要说的话！
 
-用户回复选项："""
+## 角色"{persona_name}"的背景
+{brief if brief else f'{persona_name}是用户的恋爱对象'}
+
+## 用户的身份
+{user_identity if user_identity else f'用户是{persona_name}的恋人'}
+
+## 最近一轮对话
+用户说："{user_message[:100]}"
+{persona_name}回复："{ai_dialogue[:150]}"
+
+## 生成要求
+为用户生成3个回复选项，分别对应不同情绪：
+1. 中立：平和自然的回应
+2. 冷淡：敷衍或轻微拒绝
+3. 亲密：撒娇、依赖或表达喜欢
+
+每个回复5-20字，语气自然。严格输出3行，不要编号和标签。直接输出："""
             
             logger.debug(f"[推荐生成] 请求 prompt:\n{prompt}")
             
@@ -871,20 +995,21 @@ AI 回复：{filtered_response[:200]}
                 "stream": False,
                 "options": {
                     "temperature": 0.8,
-                    "num_predict": 80,
+                    "num_predict": -1,
+                    "num_ctx": 4096,
                     "top_k": 40,
                     "top_p": 0.9
                 }
             }
             logger.info(f"[推荐生成] 发送请求到 {self.base_url}/api/generate")
-            logger.debug(f"[推荐生成] 请求参数: model={self.current_model}, temperature=0.8, num_predict=80")
+            logger.debug(f"[推荐生成] 请求参数: model={self.current_model}, temperature=0.8, num_predict=300, num_ctx=4096")
             
-            # 调用 Ollama API，使用更短的超时时间
+            # 调用 Ollama API
             api_start = time.time()
             response = requests.post(
                 f"{self.base_url}/api/generate",
                 json=request_body,
-                timeout=15
+                timeout=30
             )
             api_elapsed = time.time() - api_start
             logger.info(f"[推荐生成] API 响应: status={response.status_code}, 耗时={api_elapsed:.2f}s")
@@ -892,11 +1017,11 @@ AI 回复：{filtered_response[:200]}
             if response.status_code == 200:
                 data = response.json()
                 suggestions_text = data.get('response', '').strip()
-                logger.debug(f"[推荐生成] LLM 原始返回:\n{suggestions_text}")
+                logger.info(f"[推荐生成] LLM 原始返回({len(suggestions_text)}字):\n{suggestions_text[:500]}")
                 
                 # 先过滤掉可能的深度思考内容
                 suggestions_text = filter_think_content(suggestions_text)
-                logger.debug(f"[推荐生成] 过滤思考内容后:\n{suggestions_text}")
+                logger.info(f"[推荐生成] 过滤思考内容后({len(suggestions_text)}字):\n{suggestions_text[:300]}")
                 
                 # 解析返回的选项
                 suggestions = []
@@ -904,14 +1029,16 @@ AI 回复：{filtered_response[:200]}
                     line = line.strip()
                     # 移除可能的编号
                     if line and len(line) > 2:
-                        # 移除开头的数字、点、括号等
+                        # 移除开头的数字、点、括号、标签等
                         import re
                         cleaned = re.sub(r'^[\d\.\)\]】\-\*]+\s*', '', line)
-                        if cleaned and len(cleaned) <= 50:
+                        # 移除可能的方向标签（如"中立："、"冷淡："等）
+                        cleaned = re.sub(r'^(中立|冷淡|亲密)[：:]\s*', '', cleaned)
+                        if cleaned and 3 <= len(cleaned) <= 50:
                             suggestions.append(cleaned)
-                            logger.debug(f"[推荐生成] 解析到选项: {cleaned}")
+                            logger.info(f"[推荐生成] 解析到选项: {cleaned}")
                         else:
-                            logger.debug(f"[推荐生成] 跳过选项(过长或为空): {cleaned[:30] if cleaned else '空'}...")
+                            logger.info(f"[推荐生成] 跳过选项(长度不符): len={len(cleaned) if cleaned else 0}, content={cleaned[:30] if cleaned else '空'}")
                 
                 result = suggestions[:count]
                 total_elapsed = time.time() - start_time
@@ -925,7 +1052,7 @@ AI 回复：{filtered_response[:200]}
         
         except requests.exceptions.Timeout:
             elapsed = time.time() - start_time
-            logger.warning(f"[推荐生成] 请求超时(15s)，已耗时={elapsed:.2f}s")
+            logger.warning(f"[推荐生成] 请求超时(20s)，已耗时={elapsed:.2f}s")
             return []
         except Exception as e:
             elapsed = time.time() - start_time

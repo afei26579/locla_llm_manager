@@ -30,6 +30,9 @@ class ChatPage(QWidget):
         self.theme = get_theme_manager()
         self._is_generating = False  # 跟踪生成状态
         
+        # 加载 debug 配置
+        self.debug_mode = self._load_debug_config()
+        
         # 用户和 AI 配置
         self.user_name = "我"
         self.ai_name = ""  # 默认使用模型名
@@ -50,6 +53,27 @@ class ChatPage(QWidget):
         self.background_interval = 5
         self.current_bg_index = 0
         self.bg_timer = None
+    
+    def _load_debug_config(self) -> bool:
+        """加载 debug 配置"""
+        import os
+        import sys
+        import json
+        
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        config_path = os.path.join(base_dir, 'config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('debug', False)
+            except:
+                pass
+        return False
     
     def setup_ui(self):
         # 主布局：水平布局（聊天区 + 右侧面板）
@@ -970,10 +994,270 @@ class ChatPage(QWidget):
 
     def clear_welcome(self):
         if hasattr(self, 'welcome_widget') and self.welcome_widget:
-            self.welcome_widget.deleteLater()
+            try:
+                self.welcome_widget.deleteLater()
+            except RuntimeError:
+                pass
             self.welcome_widget = None
         if hasattr(self, 'carousel') and self.carousel:
             self.carousel = None
+        # 清除角色介绍页面
+        if hasattr(self, 'intro_widget') and self.intro_widget:
+            try:
+                self.intro_widget.deleteLater()
+            except RuntimeError:
+                pass
+            self.intro_widget = None
+    
+    def clear_persona_intro(self):
+        """清除角色介绍页面"""
+        if hasattr(self, 'intro_widget') and self.intro_widget:
+            try:
+                self.intro_widget.deleteLater()
+            except RuntimeError:
+                pass
+            self.intro_widget = None
+    
+    def show_persona_intro(self, persona: dict, on_start_callback):
+        """显示角色介绍页面（卡片样式）
+        
+        Args:
+            persona: 角色数据字典
+            on_start_callback: 点击开始对话按钮的回调函数
+        """
+        self.clear_welcome()
+        
+        c = self.theme.colors
+        
+        # 隶书字体（Windows 自带）
+        title_font = "LiSu, 隶书, Microsoft YaHei UI"
+        content_font = "Microsoft YaHei UI"
+        
+        # 内容区块背景色（比卡片背景稍深/浅，适配主题）
+        content_bg = c.get('card_bg', c['bg_secondary'])
+        
+        self.intro_widget = QWidget()
+        self.intro_widget.setStyleSheet("background: transparent;")
+        
+        # 使用居中布局
+        layout = QVBoxLayout(self.intro_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignCenter)  # 上下左右居中
+        
+        # 卡片容器
+        card = QFrame()
+        card.setFixedWidth(680)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {c['bg_secondary']};
+                border-radius: 16px;
+                border: 1px solid {c['border']};
+            }}
+        """)
+        
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(30, 30, 30, 30)
+        card_layout.setSpacing(15)
+        
+        # ===== 上半部分：左侧头像+信息，右侧背景故事+关系 =====
+        top_section = QWidget()
+        top_layout = QHBoxLayout(top_section)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(25)
+        
+        # 左侧：头像 + 个人信息
+        left_widget = QWidget()
+        left_widget.setFixedWidth(200)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
+        left_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        
+        # 头像（放大到 150x150）
+        avatar = QLabel()
+        avatar.setFixedSize(150, 150)
+        avatar.setAlignment(Qt.AlignCenter)
+        
+        icon_path = persona.get('icon_path', '')
+        if icon_path:
+            from PySide6.QtGui import QPixmap
+            from core.media_manager import get_media_manager
+            media_manager = get_media_manager()
+            abs_path = media_manager.get_absolute_path(icon_path)
+            if os.path.exists(abs_path):
+                pixmap = QPixmap(abs_path).scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                avatar.setPixmap(pixmap)
+                avatar.setStyleSheet("border-radius: 12px; background: transparent;")
+            else:
+                avatar.setText(persona.get('icon', '🎭'))
+                avatar.setFont(QFont("Segoe UI Emoji", 60))
+        else:
+            avatar.setText(persona.get('icon', '🎭'))
+            avatar.setFont(QFont("Segoe UI Emoji", 60))
+        
+        left_layout.addWidget(avatar, 0, Qt.AlignCenter)
+        
+        # 姓名
+        name_label = QLabel(persona.get('name', '未知角色'))
+        name_label.setFont(QFont(title_font, 20, QFont.Bold))
+        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setStyleSheet(f"color: {c['text']}; background: transparent;")
+        left_layout.addWidget(name_label)
+        
+        # 个人信息（带背景色和内边距）
+        profile = persona.get('profile', {})
+        info_lines = []
+        
+        gender = persona.get('gender', '') or profile.get('gender', '')
+        age = profile.get('age', '')
+        if gender or age:
+            info_lines.append(f"{'♂ ' if gender == '男' else '♀ ' if gender == '女' else ''}{gender} {age}".strip())
+        
+        height = profile.get('height', '')
+        weight = profile.get('weight', '')
+        if height or weight:
+            hw = []
+            if height: hw.append(f"身高: {height}")
+            if weight: hw.append(f"体重: {weight}")
+            info_lines.append("  ".join(hw))
+        
+        measurements = profile.get('measurements', '')
+        if measurements:
+            info_lines.append(f"三围: {measurements}")
+        
+        occupation = profile.get('occupation', '')
+        if occupation:
+            info_lines.append(f"职业: {occupation}")
+        
+        skills = profile.get('skills', '')
+        if skills:
+            info_lines.append(f"精通: {skills}")
+        
+        if info_lines:
+            # 个人信息容器（带背景色）
+            info_container = QFrame()
+            info_container.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {content_bg};
+                    border-radius: 10px;
+                    border: 1px solid {c['border']};
+                }}
+            """)
+            info_container_layout = QVBoxLayout(info_container)
+            info_container_layout.setContentsMargins(15, 12, 15, 12)
+            
+            info_text = QLabel("\n".join(info_lines))  # 单换行，减少行间距
+            info_text.setFont(QFont(content_font, 10))
+            info_text.setAlignment(Qt.AlignCenter)
+            info_text.setStyleSheet(f"color: {c['text_secondary']}; background: transparent;")
+            info_text.setWordWrap(True)
+            info_container_layout.addWidget(info_text)
+            
+            left_layout.addWidget(info_container)
+        
+        left_layout.addStretch()
+        top_layout.addWidget(left_widget, 0)
+        
+        # 右侧：背景故事 + 与用户关系（上下平分）
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(15)
+        
+        # 背景故事容器（带背景色，占一半）
+        background_story = profile.get('background', '') or persona.get('description', '')
+        if background_story:
+            bg_container = QFrame()
+            bg_container.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {content_bg};
+                    border-radius: 10px;
+                    border: 1px solid {c['border']};
+                }}
+            """)
+            bg_layout = QVBoxLayout(bg_container)
+            bg_layout.setContentsMargins(15, 12, 15, 12)
+            bg_layout.setSpacing(8)
+            
+            bg_title = QLabel("📖 背景故事")
+            bg_title.setFont(QFont(title_font, 12, QFont.Bold))
+            bg_title.setStyleSheet(f"color: {c['accent']}; background: transparent;")
+            bg_layout.addWidget(bg_title)
+            
+            bg_content = QLabel(background_story)
+            bg_content.setFont(QFont(content_font, 10))
+            bg_content.setStyleSheet(f"color: {c['text']}; background: transparent;")
+            bg_content.setWordWrap(True)
+            bg_layout.addWidget(bg_content)
+            bg_layout.addStretch()
+            
+            right_layout.addWidget(bg_container, 1)
+        
+        # 与用户关系容器（带背景色，占一半）
+        user_identity = persona.get('user_identity', '')
+        if user_identity:
+            relation_container = QFrame()
+            relation_container.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {content_bg};
+                    border-radius: 10px;
+                    border: 1px solid {c['border']};
+                }}
+            """)
+            relation_layout = QVBoxLayout(relation_container)
+            relation_layout.setContentsMargins(15, 12, 15, 12)
+            relation_layout.setSpacing(8)
+            
+            relation_title = QLabel("💕 与你的关系")
+            relation_title.setFont(QFont(title_font, 12, QFont.Bold))
+            relation_title.setStyleSheet(f"color: {c['accent']}; background: transparent;")
+            relation_layout.addWidget(relation_title)
+            
+            relation_content = QLabel(user_identity)
+            relation_content.setFont(QFont(content_font, 10))
+            relation_content.setStyleSheet(f"color: {c['text']}; background: transparent;")
+            relation_content.setWordWrap(True)
+            relation_layout.addWidget(relation_content)
+            relation_layout.addStretch()
+            
+            right_layout.addWidget(relation_container, 1)
+        
+        top_layout.addWidget(right_widget, 1)
+        
+        card_layout.addWidget(top_section)
+        
+        # ===== 开始对话按钮 =====
+        start_btn = QPushButton("💬 开始对话")
+        start_btn.setFont(QFont(title_font, 13, QFont.Bold))
+        start_btn.setFixedHeight(45)
+        start_btn.setMaximumWidth(180)
+        start_btn.setCursor(Qt.PointingHandCursor)
+        start_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c['accent']};
+                color: white;
+                border: none;
+                border-radius: 22px;
+                padding: 8px 30px;
+            }}
+            QPushButton:hover {{
+                background-color: {c['accent_hover']};
+            }}
+        """)
+        start_btn.clicked.connect(on_start_callback)
+        
+        btn_container = QWidget()
+        btn_layout = QHBoxLayout(btn_container)
+        btn_layout.setContentsMargins(0, 10, 0, 0)
+        btn_layout.setAlignment(Qt.AlignCenter)
+        btn_layout.addWidget(start_btn)
+        card_layout.addWidget(btn_container)
+        
+        layout.addWidget(card, 0, Qt.AlignCenter)
+        
+        # 添加到聊天区域
+        self.chat_layout.insertWidget(0, self.intro_widget)
     
     def _update_welcome_theme(self):
         """更新欢迎页面的主题"""
@@ -1023,6 +1307,24 @@ class ChatPage(QWidget):
             item = self.chat_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+    
+    def remove_last_messages(self, count: int = 1):
+        """删除最后 N 条消息气泡"""
+        removed = 0
+        # 从倒数第二个开始（最后一个是 stretch）
+        while removed < count and self.chat_layout.count() > 1:
+            index = self.chat_layout.count() - 2  # stretch 前一个
+            if index >= 0:
+                item = self.chat_layout.takeAt(index)
+                if item and item.widget():
+                    try:
+                        item.widget().deleteLater()
+                    except RuntimeError:
+                        pass
+                    removed += 1
+            else:
+                break
+        self.current_ai_bubble = None
     
     def add_user_message(self, text: str, timestamp: str = None):
         """添加用户消息"""
@@ -1087,10 +1389,23 @@ class ChatPage(QWidget):
     def update_ai_response(self, text: str):
         """更新 AI 回复内容"""
         if self.current_ai_bubble:
-            self.current_ai_bubble.update_text(text)
-            self.scroll_to_bottom()
+            try:
+                self.current_ai_bubble.update_text(text)
+                self.scroll_to_bottom()
+            except RuntimeError:
+                # 气泡已被删除
+                self.current_ai_bubble = None
     
     def finish_ai_response(self):
+        """完成 AI 回复"""
+        if self.current_ai_bubble:
+            try:
+                # 流式完成后，角色扮演模式下渲染富文本
+                if self.is_roleplay:
+                    self.current_ai_bubble.finalize_roleplay_text()
+            except RuntimeError:
+                # 气泡已被删除
+                pass
         self.current_ai_bubble = None
     
     def add_suggestion_buttons(self, suggestions: list):
@@ -1160,6 +1475,9 @@ class ChatPage(QWidget):
         
         text = self.input_text.toPlainText().strip()
         if text:
+            # 清除推荐回复按钮
+            self.clear_suggestion_buttons()
+            
             self.input_text.clear()
             # 获取模型参数
             model_options = self.settings_panel.get_model_options()

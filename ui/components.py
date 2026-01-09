@@ -11,6 +11,70 @@ from PySide6.QtGui import QFont
 from .themes import get_theme_manager
 
 
+def parse_roleplay_content(text: str, theme_colors: dict = None) -> str:
+    """解析角色扮演内容，转换为富文本HTML
+    
+    格式规则：
+    - (动作/神情/心理) → 斜体灰色
+    - "对话内容" → 主题适配的高亮色
+    - 其他文本 → 普通样式
+    
+    支持中英文括号和引号
+    
+    Args:
+        text: 要解析的文本
+        theme_colors: 主题颜色字典，如果不传则自动获取
+    """
+    if not text:
+        return ""
+    
+    # 获取主题颜色
+    if theme_colors is None:
+        theme = get_theme_manager()
+        theme_colors = theme.colors
+    
+    # 根据主题选择对话颜色
+    # 深色主题用浅色，浅色主题用深色
+    dialogue_color = theme_colors.get('text', '#2c3e50')
+    action_color = theme_colors.get('text_dim', '#888888')
+    
+    # 用占位符保护要替换的内容，避免HTML转义问题
+    placeholders = []
+    placeholder_idx = 0
+    
+    def save_placeholder(match, style_type):
+        nonlocal placeholder_idx
+        content = match.group(1)
+        # 转义内容中的HTML特殊字符
+        content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        if style_type == 'action':
+            html = f'<span style="color:{action_color};font-style:italic;">({content})</span>'
+        else:
+            # 对话内容使用主题文本色
+            html = f'"<span style="color:{dialogue_color};font-weight:500;">{content}</span>"'
+        placeholders.append(html)
+        placeholder_idx += 1
+        return f'\x00{placeholder_idx - 1}\x00'
+    
+    # 先用占位符替换括号内容
+    text = re.sub(r'[（\(]([^）\)]*)[）\)]', lambda m: save_placeholder(m, 'action'), text)
+    
+    # 再用占位符替换引号内容
+    text = re.sub(r'[""「]([^""」]*)[""」]', lambda m: save_placeholder(m, 'dialogue'), text)
+    
+    # 转义剩余文本中的HTML特殊字符
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    # 还原占位符
+    for i, html in enumerate(placeholders):
+        text = text.replace(f'\x00{i}\x00', html)
+    
+    # 处理换行
+    text = text.replace('\n', '<br>')
+    
+    return text
+
+
 def extract_think_content(text: str) -> tuple:
     """提取思考内容和正文内容
     
@@ -223,10 +287,20 @@ class ChatBubble(QFrame):
         bubble_inner = QVBoxLayout(self.bubble)
         bubble_inner.setContentsMargins(16, 12, 16, 12)
         
-        self.message_label = QLabel(main_content if not self.is_user else self.text)
+        # 角色扮演模式使用富文本渲染
+        display_text = main_content if not self.is_user else self.text
+        if self.is_roleplay and not self.is_user:
+            display_text = parse_roleplay_content(main_content, self.theme.colors)
+        
+        self.message_label = QLabel(display_text)
         self.message_label.setWordWrap(True)
         self.message_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.message_label.setFont(QFont("Microsoft YaHei UI", 11))
+        
+        # 角色扮演模式启用富文本
+        if self.is_roleplay and not self.is_user:
+            self.message_label.setTextFormat(Qt.RichText)
+        
         bubble_inner.addWidget(self.message_label)
         
         self.content_layout.addWidget(self.bubble)
@@ -324,6 +398,14 @@ class ChatBubble(QFrame):
             self.message_label.setStyleSheet(f"color: {c['text']};")
             self.name_label.setStyleSheet(f"color: {c['text_secondary']};")
             
+            # 角色扮演模式：主题切换时重新渲染富文本以更新颜色
+            if self.is_roleplay and self.text and not self._is_loading:
+                _, main_content = extract_think_content(self.text)
+                if main_content:
+                    rich_text = parse_roleplay_content(main_content, c)
+                    self.message_label.setTextFormat(Qt.RichText)
+                    self.message_label.setText(rich_text)
+            
             # 思考气泡样式（使用不同的背景色）
             if self.think_bubble:
                 # 根据主题选择思考气泡的背景色
@@ -355,7 +437,10 @@ class ChatBubble(QFrame):
     def _stop_loading_animation(self):
         """停止加载动画"""
         if self._loading_timer:
-            self._loading_timer.stop()
+            try:
+                self._loading_timer.stop()
+            except RuntimeError:
+                pass
             self._loading_timer = None
         self._is_loading = False
     
@@ -383,9 +468,10 @@ class ChatBubble(QFrame):
             
             self.text = text
             
-            # 角色扮演模式下不显示思考内容
+            # 角色扮演模式：流式输出时用纯文本，避免频繁解析阻塞UI
             if self.is_roleplay:
-                # 只显示正文（过滤掉思考内容）
+                # 流式过程中暂时用纯文本显示
+                self.message_label.setTextFormat(Qt.PlainText)
                 self.message_label.setText(main_content)
             else:
                 # 助手模式：分开显示思考和正文
@@ -405,6 +491,17 @@ class ChatBubble(QFrame):
                 self._stop_loading_animation()
             self.text = text
             self.message_label.setText(text)
+    
+    def finalize_roleplay_text(self):
+        """流式完成后，将角色扮演文本渲染为富文本"""
+        if not self.is_roleplay or self.is_user:
+            return
+        
+        _, main_content = extract_think_content(self.text)
+        if main_content:
+            rich_text = parse_roleplay_content(main_content, self.theme.colors)
+            self.message_label.setTextFormat(Qt.RichText)
+            self.message_label.setText(rich_text)
     
     def _create_think_bubble(self, think_content: str):
         """动态创建思考气泡"""

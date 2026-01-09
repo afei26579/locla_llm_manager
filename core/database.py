@@ -259,6 +259,36 @@ class Database:
                 ''')
                 conn.commit()
                 logger.info("✅ 已添加 personas.user_identity 字段")
+            
+            # 添加 brief 字段（角色简介）
+            if 'brief' not in columns:
+                logger.info("开始迁移：添加 personas.brief 字段")
+                cursor.execute('''
+                    ALTER TABLE personas 
+                    ADD COLUMN brief TEXT DEFAULT ''
+                ''')
+                conn.commit()
+                logger.info("✅ 已添加 personas.brief 字段")
+            
+            # 添加 is_system 字段（是否为系统角色）
+            if 'is_system' not in columns:
+                logger.info("开始迁移：添加 personas.is_system 字段")
+                cursor.execute('''
+                    ALTER TABLE personas 
+                    ADD COLUMN is_system INTEGER DEFAULT 0
+                ''')
+                conn.commit()
+                logger.info("✅ 已添加 personas.is_system 字段")
+            
+            # 添加 profile 字段（角色详细档案，JSON格式）
+            if 'profile' not in columns:
+                logger.info("开始迁移：添加 personas.profile 字段")
+                cursor.execute('''
+                    ALTER TABLE personas 
+                    ADD COLUMN profile TEXT DEFAULT '{}'
+                ''')
+                conn.commit()
+                logger.info("✅ 已添加 personas.profile 字段")
                 
         except Exception as e:
             logger.error(f"迁移角色对话字段失败: {e}")
@@ -416,6 +446,45 @@ class Database:
             logger.error(f"获取消息失败: {e}")
             return []
     
+    def delete_last_message(self, conv_id: str, role: str = None) -> bool:
+        """删除对话的最后一条消息
+        
+        Args:
+            conv_id: 对话ID
+            role: 可选，指定角色（user/assistant），不指定则删除最后一条
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            if role:
+                cursor.execute('''
+                    DELETE FROM messages 
+                    WHERE id = (
+                        SELECT id FROM messages 
+                        WHERE conversation_id = ? AND role = ?
+                        ORDER BY timestamp DESC LIMIT 1
+                    )
+                ''', (conv_id, role))
+            else:
+                cursor.execute('''
+                    DELETE FROM messages 
+                    WHERE id = (
+                        SELECT id FROM messages 
+                        WHERE conversation_id = ?
+                        ORDER BY timestamp DESC LIMIT 1
+                    )
+                ''', (conv_id,))
+            
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"已删除对话 {conv_id} 的最后一条{role or ''}消息")
+            return deleted
+        except Exception as e:
+            logger.error(f"删除消息失败: {e}")
+            return False
+    
     def get_messages_by_model(self, conv_id: str, model: str) -> List[Dict]:
         """获取指定模型的消息"""
         try:
@@ -565,7 +634,9 @@ class Database:
                    icon_path: str = '', description: str = '', system_prompt: str = '',
                    persona_type: str = 'assistant', background_images: str = '',
                    scene_designs: list = None, enable_suggestions: bool = True,
-                   gender: str = '', user_identity: str = '') -> bool:
+                   gender: str = '', user_identity: str = '', 
+                   brief: str = '', is_system: bool = False,
+                   profile: dict = None) -> bool:
         """添加人格"""
         try:
             conn = self.get_connection()
@@ -573,14 +644,17 @@ class Database:
             
             # 将 scene_designs 列表转换为 JSON 字符串
             scene_designs_str = json.dumps(scene_designs if scene_designs else [])
+            # 将 profile 字典转换为 JSON 字符串
+            profile_str = json.dumps(profile if profile else {})
             
             cursor.execute('''
                 INSERT OR REPLACE INTO personas 
                 (key, name, icon, icon_path, description, system_prompt, type, background_images, 
-                 scene_designs, enable_suggestions, gender, user_identity)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 scene_designs, enable_suggestions, gender, user_identity, brief, is_system, profile)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (key, name, icon, icon_path, description, system_prompt, persona_type, background_images,
-                  scene_designs_str, 1 if enable_suggestions else 0, gender, user_identity))
+                  scene_designs_str, 1 if enable_suggestions else 0, gender, user_identity,
+                  brief, 1 if is_system else 0, profile_str))
             
             conn.commit()
             return True
@@ -611,6 +685,19 @@ class Database:
                 # 转换 enable_suggestions 为布尔值
                 if 'enable_suggestions' in persona:
                     persona['enable_suggestions'] = bool(persona['enable_suggestions'])
+                
+                # 转换 is_system 为布尔值
+                if 'is_system' in persona:
+                    persona['is_system'] = bool(persona['is_system'])
+                
+                # 解析 profile JSON 字符串
+                if 'profile' in persona and persona['profile']:
+                    try:
+                        persona['profile'] = json.loads(persona['profile'])
+                    except:
+                        persona['profile'] = {}
+                else:
+                    persona['profile'] = {}
                 
                 return persona
             return None
@@ -644,6 +731,19 @@ class Database:
                 # 转换 enable_suggestions 为布尔值
                 if 'enable_suggestions' in row_dict:
                     row_dict['enable_suggestions'] = bool(row_dict['enable_suggestions'])
+                
+                # 转换 is_system 为布尔值
+                if 'is_system' in row_dict:
+                    row_dict['is_system'] = bool(row_dict['is_system'])
+                
+                # 解析 profile JSON 字符串
+                if 'profile' in row_dict and row_dict['profile']:
+                    try:
+                        row_dict['profile'] = json.loads(row_dict['profile'])
+                    except:
+                        row_dict['profile'] = {}
+                else:
+                    row_dict['profile'] = {}
                 
                 personas[key] = row_dict
             

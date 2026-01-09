@@ -20,6 +20,69 @@ class OllamaManager:
             self.base_dir = os.path.dirname(sys.executable)
         else:
             self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # PID 文件路径，用于追踪启动的进程
+        self.pid_file = os.path.join(self.base_dir, ".ollama_pid")
+        
+        # 启动时清理上次可能残留的进程
+        self._cleanup_stale_process()
+    
+    def _cleanup_stale_process(self):
+        """清理上次异常退出残留的进程"""
+        if not os.path.exists(self.pid_file):
+            return
+        
+        try:
+            with open(self.pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            
+            # 检查进程是否还在运行，且是 ollama 进程
+            if sys.platform == 'win32':
+                # 使用 tasklist 检查进程
+                result = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {old_pid}', '/FO', 'CSV', '/NH'],
+                    capture_output=True, text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                if 'ollama' in result.stdout.lower():
+                    logger.info(f"[清理] 发现残留 Ollama 进程 PID={old_pid}，正在终止...")
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(old_pid)],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+            else:
+                # Linux/Mac
+                import signal
+                try:
+                    os.kill(old_pid, 0)  # 检查进程是否存在
+                    os.killpg(os.getpgid(old_pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        except Exception as e:
+            logger.debug(f"清理残留进程失败: {e}")
+        finally:
+            # 删除旧的 PID 文件
+            try:
+                os.remove(self.pid_file)
+            except:
+                pass
+    
+    def _save_pid(self, pid: int):
+        """保存进程 PID 到文件"""
+        try:
+            with open(self.pid_file, 'w') as f:
+                f.write(str(pid))
+        except Exception as e:
+            logger.debug(f"保存 PID 失败: {e}")
+    
+    def _remove_pid_file(self):
+        """删除 PID 文件"""
+        try:
+            if os.path.exists(self.pid_file):
+                os.remove(self.pid_file)
+        except:
+            pass
     
     def _find_ollama(self):
         """查找 Ollama 可执行文件"""
@@ -79,6 +142,9 @@ class OllamaManager:
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
             
+            # 保存 PID 用于异常退出后清理
+            self._save_pid(self.process.pid)
+            
             for i in range(30):
                 if self.is_running():
                     return True, "服务启动成功"
@@ -91,8 +157,30 @@ class OllamaManager:
     def stop_service(self):
         """停止 Ollama 服务"""
         if self.process:
-            self.process.terminate()
-            self.process = None
+            try:
+                pid = self.process.pid
+                # Windows 下终止进程树（包括子进程）
+                if sys.platform == 'win32':
+                    # 使用 taskkill /T 终止进程树
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(pid)],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                else:
+                    # Linux/Mac 使用 SIGTERM
+                    import signal
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+            except Exception as e:
+                logger.warning(f"终止 Ollama 进程失败: {e}")
+                # 回退到普通 terminate
+                try:
+                    self.process.terminate()
+                except:
+                    pass
+            finally:
+                self.process = None
+                self._remove_pid_file()
             return True
         return False
     

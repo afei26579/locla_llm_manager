@@ -359,8 +359,8 @@ class SettingsPage(QWidget):
     uninstall_model = Signal(str)
     theme_changed = Signal(str)
     personal_changed = Signal(str, str, str, list, int)  # user_name, avatar_path, avatar_color, backgrounds, interval
-    persona_added = Signal(str, str, str, str, str, str, str, list, list, bool, str, str)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity
-    persona_edited = Signal(str, str, str, str, str, str, str, list, list, bool, str, str)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity
+    persona_added = Signal(str, str, str, str, str, str, str, list, list, bool, str, str, str, bool)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity, brief, is_system
+    persona_edited = Signal(str, str, str, str, str, str, str, list, list, bool, str, str, str, bool)  # key, name, type, icon, desc, prompt, icon_path, backgrounds, scene_designs, enable_suggestions, gender, user_identity, brief, is_system
     persona_deleted = Signal(str)
     
     def __init__(self, parent=None):
@@ -1554,6 +1554,9 @@ class SettingsPage(QWidget):
         # 类型固定，不显示选择（新建时根据传入的 persona_type 固定）
         self._current_persona_type = persona_type
         
+        # 检查是否为开发模式（提前定义，后续多处使用）
+        is_dev_mode = self.debug_mode
+        
         form_layout = QFormLayout()
         form_layout.setSpacing(12)
         
@@ -1610,6 +1613,33 @@ class SettingsPage(QWidget):
         if is_edit and edit_data:
             desc_input.setText(edit_data.get('description', ''))
         form_layout.addRow("描述:", desc_input)
+        
+        # 角色简介（仅开发模式 + 角色扮演类型显示）
+        self._brief_input = None
+        if persona_type == 'roleplay' and is_dev_mode:
+            brief_input = QLineEdit()
+            brief_input.setFixedHeight(36)
+            brief_input.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: {c['input_bg']};
+                    border: 2px solid {c['border']};
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    color: {c['text']};
+                    font-size: 13px;
+                }}
+                QLineEdit:focus {{
+                    border-color: {c['accent']};
+                }}
+                QLineEdit:hover {{
+                    border-color: {c['text_dim']};
+                }}
+            """)
+            brief_input.setPlaceholderText("简要描述角色性格，用于推荐系统，如：温柔体贴、傲娇毒舌")
+            if is_edit and edit_data:
+                brief_input.setText(edit_data.get('brief', ''))
+            form_layout.addRow("角色简介:", brief_input)
+            self._brief_input = brief_input
         
         # 性别选择（仅角色扮演类型显示）
         self._gender_combo = None
@@ -1721,11 +1751,41 @@ class SettingsPage(QWidget):
         layout.addWidget(icon_container)
         self._update_icon_button_styles(c)
         
-        # 提示词
+        # 系统角色开关（仅开发模式下显示）
+        self._is_system_checkbox = None
+        self._prompt_label = None
+        self._prompt_input = None
+        
+        # 编辑时检查是否为系统角色
+        is_system_persona = edit_data.get('is_system', False) if (is_edit and edit_data) else False
+        
+        if is_dev_mode:
+            # 开发模式下显示系统角色开关
+            from PySide6.QtWidgets import QCheckBox
+            is_system_checkbox = QCheckBox("系统角色（普通用户不可见）")
+            is_system_checkbox.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {c['text']};
+                    font-size: 12px;
+                }}
+                QCheckBox::indicator {{
+                    width: 18px;
+                    height: 18px;
+                }}
+            """)
+            is_system_checkbox.setChecked(is_system_persona)
+            layout.addWidget(is_system_checkbox)
+            self._is_system_checkbox = is_system_checkbox
+        
+        # 提示词（系统角色在非开发模式下隐藏）
+        show_prompt = is_dev_mode or not is_system_persona
+        
         prompt_label = QLabel("系统提示词:")
         prompt_label.setStyleSheet(f"color: {c['text']};")
         prompt_label.setFont(QFont("Microsoft YaHei UI", 11))
+        prompt_label.setVisible(show_prompt)
         layout.addWidget(prompt_label)
+        self._prompt_label = prompt_label
         
         prompt_input = QTextEdit()
         prompt_input.setPlaceholderText("定义助手的行为方式...\n\n例如：你是一只可爱的猫娘，名叫阿里。")
@@ -1750,7 +1810,9 @@ class SettingsPage(QWidget):
         """)
         if is_edit and edit_data:
             prompt_input.setText(edit_data.get('system_prompt', ''))
+        prompt_input.setVisible(show_prompt)
         layout.addWidget(prompt_input)
+        self._prompt_input = prompt_input
         
         # 用户身份设计（仅角色扮演类型显示）
         self._user_identity_input = None
@@ -2237,7 +2299,7 @@ class SettingsPage(QWidget):
         if dialog.exec() == QDialog.Accepted:
             name = name_input.text().strip()
             desc = desc_input.text().strip()
-            prompt = prompt_input.toPlainText().strip()
+            prompt = self._prompt_input.toPlainText().strip() if self._prompt_input else ""
             persona_type = self._current_persona_type  # 获取类型
             
             # 获取角色对话字段
@@ -2245,8 +2307,17 @@ class SettingsPage(QWidget):
             enable_suggestions = True
             gender = ""
             user_identity = ""
+            brief = ""
+            is_system = False
+            
+            # 获取系统角色标记（仅开发模式下有此选项）
+            if self._is_system_checkbox:
+                is_system = self._is_system_checkbox.isChecked()
             
             if persona_type == 'roleplay':
+                # 收集角色简介
+                if self._brief_input:
+                    brief = self._brief_input.text().strip()
                 # 收集用户身份设计
                 if self._user_identity_input:
                     user_identity = self._user_identity_input.toPlainText().strip()
@@ -2292,7 +2363,9 @@ class SettingsPage(QWidget):
                     scene_designs,  # 场景设计
                     enable_suggestions,  # 启用推荐
                     gender,  # 性别
-                    user_identity  # 用户身份
+                    user_identity,  # 用户身份
+                    brief,  # 角色简介
+                    is_system  # 系统角色
                 )
             else:
                 # 添加模式 - 使用时间戳生成唯一标识
@@ -2307,7 +2380,9 @@ class SettingsPage(QWidget):
                     scene_designs,  # 场景设计
                     enable_suggestions,  # 启用推荐
                     gender,  # 性别
-                    user_identity  # 用户身份
+                    user_identity,  # 用户身份
+                    brief,  # 角色简介
+                    is_system  # 系统角色（用户添加默认为 False）
                 )
 
     def _on_icon_selected(self, emoji: str, btn):

@@ -618,6 +618,21 @@ class MainWindow(QMainWindow):
         """使用指定人格创建新对话"""
         from core.media_manager import get_media_manager
         
+        # 检查是否正在生成中
+        if self.chat_manager.is_generating:
+            if not self.show_confirm_dialog(
+                "新建对话",
+                "AI 正在生成回复中，新建对话将终止当前生成。\n确定要新建吗？",
+                icon="⏹️",
+                confirm_text="确定",
+                cancel_text="取消"
+            ):
+                return
+            self.stop_generation()
+            # 强制恢复输入框状态
+            self.chat_page.set_send_enabled(True)
+            self.chat_page.current_ai_bubble = None
+        
         self.save_current_chat()
         chat_id = self.chat_manager.new_chat(persona_key)
         self.current_chat_id = chat_id
@@ -693,49 +708,80 @@ class MainWindow(QMainWindow):
                 pass
             self.current_history_item = None
         
-        # 如果是角色扮演，随机选择一个场景并发送开场白
+        # 如果是角色扮演，检查是否为系统角色
         if persona.get('type') == 'roleplay':
-            scene = self.chat_manager.get_random_scene(persona_key)
-            scene_text = scene.get('scene', '')
-            suggestions = scene.get('suggestions', [])
+            is_system_persona = persona.get('is_system', False)
             
-            if scene_text:
-                # 将开场白保存到数据库（作为 assistant 消息）
-                timestamp = datetime.now().isoformat()
+            if is_system_persona:
+                # 系统角色：解析 profile 并显示介绍卡片
+                from core.chat_db import parse_persona_profile
                 
-                # 获取当前模型
-                current_model = self.chat_page.get_current_ollama_name()
-                if not current_model:
-                    # 如果没有选择模型，使用默认占位符
-                    # 后续用户发送消息时会使用实际模型
-                    current_model = "system"
+                # 如果 profile 为空，从系统提示词解析
+                profile = persona.get('profile', {})
+                if not profile:
+                    profile = parse_persona_profile(persona.get('system_prompt', ''))
+                    persona['profile'] = profile
                 
-                # 保存到数据库
-                self.chat_manager.db.add_message(
-                    conv_id=chat_id,
-                    model=current_model,
-                    role='assistant',
-                    content=scene_text,
-                    timestamp=timestamp
-                )
+                # 定义开始对话的回调
+                def start_roleplay_chat():
+                    self._start_roleplay_conversation(persona_key, persona, chat_id)
                 
-                # 添加 AI 开场消息到 UI
-                self.chat_page.add_ai_message(
-                    scene_text,
-                    timestamp=timestamp
-                )
-                
-                # 添加推荐回复按钮
-                if suggestions:
-                    self.chat_page.add_suggestion_buttons(suggestions)
+                # 显示角色介绍
+                self.chat_page.show_persona_intro(persona, start_roleplay_chat)
+            else:
+                # 非系统角色：直接开始对话
+                self._start_roleplay_conversation(persona_key, persona, chat_id)
+        else:
+            # 非角色扮演模式，直接开始
+            pass
+    
+    def _start_roleplay_conversation(self, persona_key: str, persona: dict, chat_id: str):
+        """开始角色扮演对话（点击开始对话按钮后调用）"""
+        # 清除介绍页面
+        self.chat_page.clear_persona_intro()
+        
+        # 获取场景
+        scene = self.chat_manager.get_random_scene(persona_key)
+        scene_text = scene.get('scene', '')
+        suggestions = scene.get('suggestions', [])
+        
+        if scene_text:
+            # 将开场白保存到数据库（作为 assistant 消息）
+            timestamp = datetime.now().isoformat()
+            
+            # 获取当前模型
+            current_model = self.chat_page.get_current_ollama_name()
+            if not current_model:
+                current_model = "system"
+            
+            # 保存到数据库
+            self.chat_manager.db.add_message(
+                conv_id=chat_id,
+                model=current_model,
+                role='assistant',
+                content=scene_text,
+                timestamp=timestamp
+            )
+            
+            # 添加 AI 开场消息到 UI
+            self.chat_page.add_ai_message(
+                scene_text,
+                timestamp=timestamp
+            )
+            
+            # 添加推荐回复按钮
+            if suggestions:
+                self.chat_page.add_suggestion_buttons(suggestions)
 
-    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str)
+    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str, str, bool)
     def add_persona(self, key: str, name: str, persona_type: str, icon: str, desc: str, prompt: str, 
                    icon_path: str = "", backgrounds: list = None, scene_designs: list = None,
-                   enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
+                   enable_suggestions: bool = True, gender: str = "", user_identity: str = "",
+                   brief: str = "", is_system: bool = False):
         """添加助手/角色"""
         self.chat_manager.add_persona(key, name, icon, desc, prompt, icon_path, persona_type, 
-                                     backgrounds, scene_designs, enable_suggestions, gender, user_identity)
+                                     backgrounds, scene_designs, enable_suggestions, gender, user_identity,
+                                     brief, is_system)
         self.refresh_personas()
         type_name = "角色" if persona_type == "roleplay" else "助手"
         self.set_notification(f"✅ 已添加{type_name}: {name}", "success")
@@ -839,13 +885,15 @@ class MainWindow(QMainWindow):
                 self.refresh_personas()
                 self.set_notification("✅ 已删除", "success")
     
-    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str)
+    @Slot(str, str, str, str, str, str, str, list, list, bool, str, str, str, bool)
     def edit_persona(self, key: str, name: str, persona_type: str, icon: str, desc: str, prompt: str, 
                     icon_path: str, backgrounds: list = None, scene_designs: list = None,
-                    enable_suggestions: bool = True, gender: str = "", user_identity: str = ""):
+                    enable_suggestions: bool = True, gender: str = "", user_identity: str = "",
+                    brief: str = "", is_system: bool = False):
         """编辑助手/角色"""
         self.chat_manager.update_persona(key, name, icon, desc, prompt, icon_path, persona_type, 
-                                        backgrounds, scene_designs, enable_suggestions, gender, user_identity)
+                                        backgrounds, scene_designs, enable_suggestions, gender, user_identity,
+                                        brief, is_system)
         self.refresh_personas()
         type_name = "角色" if persona_type == "roleplay" else "助手"
         self.set_notification(f"✅ 已更新{type_name}: {name}", "success")
@@ -939,6 +987,129 @@ class MainWindow(QMainWindow):
         self.refresh_personas()
         self.refresh_history()
     
+    def show_confirm_dialog(self, title: str, message: str, icon: str = "⚠️", 
+                            confirm_text: str = "确定", cancel_text: str = "取消",
+                            confirm_danger: bool = False) -> bool:
+        """显示自定义确认弹窗
+        
+        Args:
+            title: 弹窗标题
+            message: 提示信息
+            icon: 图标 emoji
+            confirm_text: 确认按钮文字
+            cancel_text: 取消按钮文字
+            confirm_danger: 确认按钮是否为危险样式（红色）
+        
+        Returns:
+            用户是否点击确认
+        """
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QFont
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setFixedWidth(420)
+        dialog.setModal(True)
+        
+        c = self.theme.colors
+        dialog.setStyleSheet(f"""
+            QDialog {{
+                background-color: {c['bg']};
+                border-radius: 12px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(30, 25, 30, 25)
+        layout.setSpacing(18)
+        
+        # 图标和标题
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(12)
+        
+        icon_label = QLabel(icon)
+        icon_label.setFont(QFont("Segoe UI Emoji", 28))
+        title_layout.addWidget(icon_label)
+        
+        title_text = QLabel(title)
+        title_text.setFont(QFont("Microsoft YaHei UI", 15, QFont.Bold))
+        title_text.setStyleSheet(f"color: {c['text']};")
+        title_layout.addWidget(title_text, 1)
+        
+        layout.addLayout(title_layout)
+        
+        # 提示信息
+        msg_label = QLabel(message)
+        msg_label.setFont(QFont("Microsoft YaHei UI", 11))
+        msg_label.setStyleSheet(f"color: {c['text_secondary']}; line-height: 1.5;")
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label)
+        
+        # 按钮
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(12)
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton(cancel_text)
+        cancel_btn.setFixedSize(100, 38)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setFont(QFont("Microsoft YaHei UI", 11))
+        cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c['bg_tertiary']};
+                color: {c['text']};
+                border: 2px solid {c['border']};
+                border-radius: 10px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {c['hover']};
+                border-color: {c['text_dim']};
+            }}
+        """)
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        confirm_btn = QPushButton(confirm_text)
+        confirm_btn.setFixedSize(100, 38)
+        confirm_btn.setCursor(Qt.PointingHandCursor)
+        confirm_btn.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
+        
+        if confirm_danger:
+            confirm_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {c['error']};
+                    color: white;
+                    border: none;
+                    border-radius: 10px;
+                    font-weight: 600;
+                }}
+                QPushButton:hover {{
+                    background-color: #c82333;
+                }}
+            """)
+        else:
+            confirm_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {c['accent']};
+                    color: white;
+                    border: none;
+                    border-radius: 10px;
+                    font-weight: 600;
+                }}
+                QPushButton:hover {{
+                    background-color: {c['accent_hover']};
+                }}
+            """)
+        
+        confirm_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(confirm_btn)
+        
+        layout.addLayout(button_layout)
+        
+        return dialog.exec() == QDialog.Accepted
+    
     def refresh_history(self):
         """刷新历史记录"""
          # 刷新前重置引用
@@ -967,6 +1138,21 @@ class MainWindow(QMainWindow):
 
     def new_chat(self):
         """新建对话 - 只显示助手选择"""
+        # 检查是否正在生成中
+        if self.chat_manager.is_generating:
+            if not self.show_confirm_dialog(
+                "新建对话",
+                "AI 正在生成回复中，新建对话将终止当前生成。\n确定要新建吗？",
+                icon="⏹️",
+                confirm_text="确定",
+                cancel_text="取消"
+            ):
+                return
+            self.stop_generation()
+            # 强制恢复输入框状态
+            self.chat_page.set_send_enabled(True)
+            self.chat_page.current_ai_bubble = None
+        
         self.save_current_chat()
         self.current_chat_id = None
         
@@ -986,6 +1172,21 @@ class MainWindow(QMainWindow):
     
     def new_role_chat(self):
         """新建角色对话 - 只显示角色选择"""
+        # 检查是否正在生成中
+        if self.chat_manager.is_generating:
+            if not self.show_confirm_dialog(
+                "新建角色对话",
+                "AI 正在生成回复中，新建对话将终止当前生成。\n确定要新建吗？",
+                icon="⏹️",
+                confirm_text="确定",
+                cancel_text="取消"
+            ):
+                return
+            self.stop_generation()
+            # 强制恢复输入框状态（不等待 on_chat_done）
+            self.chat_page.set_send_enabled(True)
+            self.chat_page.current_ai_bubble = None
+        
         self.save_current_chat()
         self.current_chat_id = None
         
@@ -1006,6 +1207,23 @@ class MainWindow(QMainWindow):
     def load_history(self, data):
         """加载历史对话"""
         from core.media_manager import get_media_manager
+        
+        # 检查是否正在生成中
+        if self.chat_manager.is_generating:
+            if not self.show_confirm_dialog(
+                "切换对话",
+                "AI 正在生成回复中，切换对话将终止当前生成。\n确定要切换吗？",
+                icon="⏹️",
+                confirm_text="确定",
+                cancel_text="取消"
+            ):
+                return
+            
+            # 用户确认，停止生成
+            self.stop_generation()
+            # 强制恢复输入框状态
+            self.chat_page.set_send_enabled(True)
+            self.chat_page.current_ai_bubble = None
         
         try:
             # 重置当前历史项引用
@@ -1314,10 +1532,20 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def on_chat_done(self, result):
         """聊天完成回调"""
+        # 检查是否是用户停止的
+        was_stopped = self._stop_requested
+        
         self.chat_page.finish_ai_response()
         self.chat_page.set_send_enabled(True)
         
-        logger.info(f"on_chat_done: result type={type(result)}, is_exception={isinstance(result, Exception)}")
+        logger.info(f"on_chat_done: result type={type(result)}, is_exception={isinstance(result, Exception)}, was_stopped={was_stopped}")
+        
+        # 用户主动停止，只清除 AI 气泡（用户消息保留）
+        if was_stopped:
+            self.chat_page.remove_last_messages(1)  # 只删除 AI 气泡
+            self.set_notification("已停止生成", "")
+            self._stop_requested = False
+            return
         
         if isinstance(result, Exception):
             self.set_notification(f"生成失败: {result}", "error")
